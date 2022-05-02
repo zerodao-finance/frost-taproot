@@ -7,9 +7,13 @@ edition = "2021"
 
 [dependencies]
 curve25519-dalek = "=4.0.0-pre.1"
+digest = "0.9"
 ff = { version = "0.10", features = ["bits"] }
 elliptic-curve = { version = "0.10", features = ["serde"] }
 rand = { version = "0.8", features = ["getrandom"] }
+rand_chacha = "0.3"
+sha2 = "0.9"
+thiserror = "1"
 
 [dependencies.vsss-rs]
 git = "https://github.com/mikelodder7/vsss-rs.git"
