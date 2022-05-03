@@ -102,11 +102,13 @@ struct Round1Bcast<F: PrimeField, G: GroupElem<F>> {
     verifiers: FeldmanVerifier<G::Scalar, G>,
     wi: G::Scalar,
     ci: G::Scalar,
+    _pd: ::std::marker::PhantomData<F>,
 }
 
 struct Round1Result<F: PrimeField, G: GroupElem<F>> {
     broadcast: Round1Bcast<G::Scalar, G>,
     p2p: ShamirShare,
+    _pd: ::std::marker::PhantomData<F>,
 }
 
 type Round1Send = HashMap<u32, ShamirShare>;
@@ -117,7 +119,7 @@ enum Round1Error {
     WrongRound(u32),
 
     #[error("feldman: {0:?}")]
-    Feldman(#[from] vsss_rs::Error),
+    Feldman(vsss_rs::Error),
 
     #[error("unimplemented")]
     Unimplemented,
@@ -140,33 +142,24 @@ fn round_1<F: PrimeField, G: GroupElem<F>, R: RngCore + CryptoRng>(
     // Step 1 - (Aj0,...Ajt), (xi1,...,xin) <- FeldmanShare(s)
     let (shares, verifier) = participant
         .feldman
-        .split_secret::<G::Scalar, G, _>(s, None, rng)?;
+        .split_secret::<G::Scalar, G, _>(s, None, rng)
+        .map_err(Round1Error::Feldman)?;
 
     // Step 2 - Sample ki <- Z_q
     let ki = G::Scalar::random(rng);
 
     // Step 3 - Compute Ri = ki*G
-    let ri = ki * G::generator();
+    let ri = G::generator() * ki;
 
     // Step 4 - Compute Ci = H(i, CTX, g^{a_(i,0)}, R_i), where CTX is fixed context string
     let mut buf = Vec::new();
     buf.extend(u32::to_be_bytes(participant.id));
     buf.push(participant.ctx);
-    buf.extend(verifier.commitments[0].to_bytes().as_ref());
+    buf.extend(verifier.commitments[0].to_bytes().as_ref()); // TODO `.to_affine()`?
     buf.extend(ri.to_bytes().as_ref());
 
-    // Figure out the messy hash-to-curve nonsense.
-    // TODO Verify this is a valid way to do it.
-    let mut comm_digest = sha2::Sha256::default();
-    comm_digest.update(&buf);
-    let mut comm_hash: [u8; 32] = [0u8; 32];
-    let comm_hash_out = comm_digest.finalize();
-    for i in 0..32 {
-        // FIXME Why do I have to do this byte-by-byte?  Where is copy_from_slice?
-        comm_hash[i] = comm_hash_out[i];
-    }
-    let mut comm_rng = rand_chacha::ChaCha20Rng::from_seed(comm_hash);
-    let ci = G::Scalar::random(comm_rng);
+    // Figure out the hash-to-field thing.
+    let ci = hash_to_field::<G::Scalar>(&buf);
 
     // Step 5 - Compute Wi = ki+a_{i,0}*c_i mod q. Note that a_{i,0} is the secret.
     //
@@ -190,12 +183,13 @@ fn round_1<F: PrimeField, G: GroupElem<F>, R: RngCore + CryptoRng>(
         verifiers: verifier.clone(),
         wi,
         ci,
+        _pd: ::std::marker::PhantomData,
     };
 
     // Step 7 - P2PSend f_i(j) to each participant Pj and keep (i, f_j(i)) for himself
-    let p2p_send = Vec::new();
+    let mut p2p_send = HashMap::new();
     for i in 0..participant.other_participant_shares.len() {
-        p2p_send.push(shares[i - 1].clone());
+        p2p_send.insert(i as u32, shares[i - 1].clone());
     }
 
     // Save the things generated in step 1.
@@ -206,4 +200,163 @@ fn round_1<F: PrimeField, G: GroupElem<F>, R: RngCore + CryptoRng>(
     participant.round = 2;
 
     Ok((r1bc, p2p_send))
+}
+
+// TODO Verify this is a valid way to do it.
+fn hash_to_curve<G: Group>(buf: &[u8]) -> G {
+    let mut rng = hash_to_chacha20(buf);
+    G::random(&mut rng)
+}
+
+// TODO Verify this is a valid way to do it.
+fn hash_to_field<F: PrimeField>(buf: &[u8]) -> F {
+    let mut rng = hash_to_chacha20(buf);
+    F::random(&mut rng)
+}
+
+// TODO Verify this is a valid way to do it.
+fn hash_to_chacha20(buf: &[u8]) -> rand_chacha::ChaCha20Rng {
+    let mut comm_digest = sha2::Sha256::default();
+    comm_digest.update(&buf);
+    let mut comm_hash: [u8; 32] = [0u8; 32];
+    let comm_hash_out = comm_digest.finalize();
+
+    for i in 0..32 {
+        // FIXME Why do I have to do this byte-by-byte?  Where is copy_from_slice?
+        comm_hash[i] = comm_hash_out[i];
+    }
+
+    rand_chacha::ChaCha20Rng::from_seed(comm_hash)
+}
+
+struct Round2Bcast<F: PrimeField, G: GroupElem<F>> {
+    vk: G,
+    vk_share: G,
+    _pd: ::std::marker::PhantomData<F>,
+}
+
+#[derive(Debug, Error)]
+enum Round2Error {
+    #[error("commitment is zero")]
+    CommitmentZero,
+
+    #[error("commitment not on curve")]
+    CommitmentNotOnCurve,
+
+    #[error("hash check failed with participant {0}")]
+    HashCheckFailed(u32),
+
+    #[error("p2psend table missing participent {0}")]
+    PeerSendMissing(u32),
+
+    #[error("feldman verify failed for participant {0}")]
+    PeerFeldmanVerifyFailed(u32),
+}
+
+fn round_2<F: PrimeField, G: GroupElem<F>>(
+    participant: &mut ParticipantState<F, G>,
+    bcast: &HashMap<u32, Round1Bcast<F, G>>,
+    p2psend: HashMap<u32, ShamirShare>,
+) -> Result<Round2Bcast<F, G>, Round2Error> {
+    // We should validate Wi and Ci values in Round1Bcats
+    for (id, bc) in bcast.iter() {
+        if bc.ci.is_zero() {
+            return Err(Round2Error::CommitmentZero);
+        }
+
+        // The Go code also verifies that the point is on the curve, but Rust is
+        // better than Go, so it's not possible for our libs to construct an
+        // instance of a group element that isn't a valid group element, because
+        // obviously lol.
+    }
+
+    // Step 2 - for j in 1,...,n
+    for (id, bc) in bcast.iter() {
+        // Step 3 - if j == i, continue
+        if *id == participant.id {
+            continue;
+        }
+
+        // Step 4 - Check equation c_j = H(j, CTX, A_{j,0}, g^{w_j}*A_{j,0}^{-c_j}
+        // Get Aj0
+        let aj0 = &bc.verifiers.commitments[0];
+
+        // Compute g^{w_j}
+        let prod1 = G::generator() * bc.wi;
+
+        // Compute A_{j,0}^{-c_j}, and sum.
+        let prod2 = *aj0 * bc.ci.invert().unwrap(); // checked nonzero
+        let prod = prod1 + prod2;
+
+        // Now build commitment.
+        let mut buf = Vec::new();
+        buf.extend(u32::to_be_bytes(participant.id));
+        buf.push(participant.ctx);
+        buf.extend(aj0.to_bytes().as_ref()); // TODO `.to_affine()`?
+        buf.extend(prod.to_bytes().as_ref());
+
+        // Figure out the hash-to-field thing.
+        let cj = hash_to_field::<G::Scalar>(&buf);
+
+        // Check equation.
+        if cj != bc.ci {
+            return Err(Round2Error::HashCheckFailed(*id));
+        }
+
+        // Step 5 - FeldmanVerify
+        let fji = p2psend
+            .get(id)
+            .ok_or_else(|| Round2Error::PeerSendMissing(*id))?;
+
+        if !bc.verifiers.verify(fji) {
+            return Err(Round2Error::PeerFeldmanVerifyFailed(*id));
+        }
+    }
+
+    // FIXME convert to soft error?
+    // FIXME BROKEN
+    let sk_bytes = &participant.secret_shares.unwrap()[participant.id as usize].0;
+    let mut sk = G::Scalar::from_repr(sk_bytes).expect("shamir share parse as scalar failed");
+
+    let mut vk: G = participant.verifier.unwrap().commitments[0];
+
+    // Step 6 - Compute signing key share ski = \sum_{j=1}^n xji
+    for (id, bc) in bcast.iter() {
+        if *id == participant.id {
+            continue;
+        }
+
+        // FIXME convert to soft error?
+        // FIXME BROKEN
+        let t2 = G::Scalar::from_repr(&p2psend[id].0).expect("p2psend parse failed");
+        sk += t2;
+    }
+
+    // Step 8 - Compute verification key vk = sum(A_{j,0}), j = 1,...,n
+    for (id, bc) in bcast.iter() {
+        if *id == participant.id {
+            continue;
+        }
+
+        vk += bc.verifiers.commitments[0];
+    }
+
+    // Store signing key share.
+    participant.sk_share = Some(sk);
+
+    // Step 7 - Compute verification key share vki = ski*G and store.
+    let vk_share = G::generator() * sk;
+    participant.vk_share = Some(vk_share);
+
+    // Store verification key.
+    participant.vk = Some(vk);
+
+    // Update round number.
+    participant.round = 3;
+
+    Ok(Round2Bcast {
+        vk,
+        vk_share,
+        _pd: ::std::marker::PhantomData,
+    })
 }
