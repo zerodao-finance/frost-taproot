@@ -12,22 +12,7 @@ use vsss_rs::{Shamir, Share as ShamirShare};
 use ec::group::{Curve, Group, GroupEncoding, ScalarMul};
 use ec::ScalarArithmetic;
 
-trait GroupElem<F: PrimeField>: Curve + GroupEncoding + Default + ScalarMul<F> {}
-
-impl<F: PrimeField, T> GroupElem<F> for T where T: Curve + GroupEncoding + Default + ScalarMul<F> {}
-
-trait Math {
-    type F: PrimeField;
-    type G: Curve + GroupEncoding + Default + ScalarMul<Self::F>;
-
-    fn scalar_repr_from_bytes(
-        buf: &[u8],
-    ) -> Option<<<Self::G as Group>::Scalar as PrimeField>::Repr>;
-    fn scalar_repr_to_bytes(r: <<Self::G as Group>::Scalar as PrimeField>::Repr) -> Vec<u8>;
-
-    fn group_repr_from_bytes(buf: &[u8]) -> Option<<Self::G as GroupEncoding>::Repr>;
-    fn group_repr_to_bytes(r: <Self::G as GroupEncoding>::Repr) -> Vec<u8>;
-}
+use super::math::*;
 
 #[derive(Debug, Error)]
 pub enum Error {
