@@ -16,6 +16,19 @@ trait GroupElem<F: PrimeField>: Curve + GroupEncoding + Default + ScalarMul<F> {
 
 impl<F: PrimeField, T> GroupElem<F> for T where T: Curve + GroupEncoding + Default + ScalarMul<F> {}
 
+trait Math {
+    type F: PrimeField;
+    type G: Curve + GroupEncoding + Default + ScalarMul<Self::F>;
+
+    fn scalar_repr_from_bytes(
+        buf: &[u8],
+    ) -> Option<<<Self::G as Group>::Scalar as PrimeField>::Repr>;
+    fn scalar_repr_to_bytes(r: <<Self::G as Group>::Scalar as PrimeField>::Repr) -> Vec<u8>;
+
+    fn group_repr_from_bytes(buf: &[u8]) -> Option<<Self::G as GroupEncoding>::Repr>;
+    fn group_repr_to_bytes(r: <Self::G as GroupEncoding>::Repr) -> Vec<u8>;
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("no other participants specified")]
@@ -25,39 +38,38 @@ pub enum Error {
     Unimplemented,
 }
 
-struct ParticipantState<F: PrimeField, G: GroupElem<F>> {
+struct ParticipantState<M: Math> {
     round: u32,
 
     // Setup variables
     id: u32,
     feldman: Feldman,
-    other_participant_shares: HashMap<u32, ParticipantData<F, G>>,
+    other_participant_shares: HashMap<u32, ParticipantData<M>>,
     ctx: u8, // not sure what this is, copied from the Go code
 
     // Round 1 variables.
-    verifier: Option<FeldmanVerifier<G::Scalar, G>>,
+    verifier: Option<FeldmanVerifier<<M::G as Group>::Scalar, M::G>>,
     secret_shares: Option<Vec<ShamirShare>>,
 
     // Other variables (for unimplemented rounds)
-    sk_share: Option<G::Scalar>,
-    vk: Option<G>,
-    vk_share: Option<G>,
+    sk_share: Option<<M::G as Group>::Scalar>,
+    vk: Option<M::G>,
+    vk_share: Option<M::G>,
 }
 
-struct ParticipantData<F: PrimeField, G: GroupElem<F>> {
+struct ParticipantData<M: Math> {
     id: u32,
     share: Option<ShamirShare>,
-    verifiers: Option<FeldmanVerifier<G::Scalar, G>>,
-    _pd: ::std::marker::PhantomData<F>,
+    verifiers: Option<FeldmanVerifier<<M::G as Group>::Scalar, M::G>>,
 }
 
-impl<F: PrimeField, G: GroupElem<F>> ParticipantState<F, G> {
+impl<M: Math> ParticipantState<M> {
     fn new(
         id: u32,
         thresh: u32,
         ctx: u8,
         other_participants: Vec<u32>,
-    ) -> Result<ParticipantState<F, G>, Error> {
+    ) -> Result<ParticipantState<M>, Error> {
         if other_participants.is_empty() {
             return Err(Error::NoOtherParticipants);
         }
@@ -73,11 +85,10 @@ impl<F: PrimeField, G: GroupElem<F>> ParticipantState<F, G> {
 
         let mut other_participant_shares = HashMap::new();
         for opid in other_participants {
-            let pd: ParticipantData<F, G> = ParticipantData {
+            let pd: ParticipantData<M> = ParticipantData {
                 id: opid,
                 share: None,
                 verifiers: None,
-                _pd: ::std::marker::PhantomData,
             };
 
             other_participant_shares.insert(opid, pd);
@@ -98,17 +109,15 @@ impl<F: PrimeField, G: GroupElem<F>> ParticipantState<F, G> {
     }
 }
 
-struct Round1Bcast<F: PrimeField, G: GroupElem<F>> {
-    verifiers: FeldmanVerifier<G::Scalar, G>,
-    wi: G::Scalar,
-    ci: G::Scalar,
-    _pd: ::std::marker::PhantomData<F>,
+struct Round1Bcast<M: Math> {
+    verifiers: FeldmanVerifier<<M::G as Group>::Scalar, M::G>,
+    wi: <M::G as Group>::Scalar,
+    ci: <M::G as Group>::Scalar,
 }
 
-struct Round1Result<F: PrimeField, G: GroupElem<F>> {
-    broadcast: Round1Bcast<G::Scalar, G>,
+struct Round1Result<M: Math> {
+    broadcast: Round1Bcast<M>,
     p2p: ShamirShare,
-    _pd: ::std::marker::PhantomData<F>,
 }
 
 type Round1Send = HashMap<u32, ShamirShare>;
@@ -125,11 +134,11 @@ enum Round1Error {
     Unimplemented,
 }
 
-fn round_1<F: PrimeField, G: GroupElem<F>, R: RngCore + CryptoRng>(
-    participant: &mut ParticipantState<F, G>,
-    secret: G::Scalar,
+fn round_1<M: Math, R: RngCore + CryptoRng>(
+    participant: &mut ParticipantState<M>,
+    secret: <M::G as Group>::Scalar,
     rng: &mut R,
-) -> Result<(Round1Bcast<F, G>, Round1Send), Round1Error> {
+) -> Result<(Round1Bcast<M>, Round1Send), Round1Error> {
     if participant.round != 1 {
         return Err(Round1Error::WrongRound(participant.round));
     }
@@ -142,14 +151,14 @@ fn round_1<F: PrimeField, G: GroupElem<F>, R: RngCore + CryptoRng>(
     // Step 1 - (Aj0,...Ajt), (xi1,...,xin) <- FeldmanShare(s)
     let (shares, verifier) = participant
         .feldman
-        .split_secret::<G::Scalar, G, _>(s, None, rng)
+        .split_secret::<<M::G as Group>::Scalar, M::G, _>(s, None, rng)
         .map_err(Round1Error::Feldman)?;
 
     // Step 2 - Sample ki <- Z_q
-    let ki = G::Scalar::random(rng);
+    let ki = <M::G as Group>::Scalar::random(rng);
 
     // Step 3 - Compute Ri = ki*G
-    let ri = G::generator() * ki;
+    let ri = <M::G as Group>::generator() * ki;
 
     // Step 4 - Compute Ci = H(i, CTX, g^{a_(i,0)}, R_i), where CTX is fixed context string
     let mut buf = Vec::new();
@@ -159,7 +168,7 @@ fn round_1<F: PrimeField, G: GroupElem<F>, R: RngCore + CryptoRng>(
     buf.extend(ri.to_bytes().as_ref());
 
     // Figure out the hash-to-field thing.
-    let ci = hash_to_field::<G::Scalar>(&buf);
+    let ci = hash_to_field::<<M::G as Group>::Scalar>(&buf);
 
     // Step 5 - Compute Wi = ki+a_{i,0}*c_i mod q. Note that a_{i,0} is the secret.
     //
@@ -183,7 +192,6 @@ fn round_1<F: PrimeField, G: GroupElem<F>, R: RngCore + CryptoRng>(
         verifiers: verifier.clone(),
         wi,
         ci,
-        _pd: ::std::marker::PhantomData,
     };
 
     // Step 7 - P2PSend f_i(j) to each participant Pj and keep (i, f_j(i)) for himself
@@ -229,10 +237,9 @@ fn hash_to_chacha20(buf: &[u8]) -> rand_chacha::ChaCha20Rng {
     rand_chacha::ChaCha20Rng::from_seed(comm_hash)
 }
 
-struct Round2Bcast<F: PrimeField, G: GroupElem<F>> {
-    vk: G,
-    vk_share: G,
-    _pd: ::std::marker::PhantomData<F>,
+struct Round2Bcast<M: Math> {
+    vk: M::G,
+    vk_share: M::G,
 }
 
 #[derive(Debug, Error)]
@@ -253,11 +260,11 @@ enum Round2Error {
     PeerFeldmanVerifyFailed(u32),
 }
 
-fn round_2<F: PrimeField, G: GroupElem<F>>(
-    participant: &mut ParticipantState<F, G>,
-    bcast: &HashMap<u32, Round1Bcast<F, G>>,
+fn round_2<M: Math>(
+    participant: &mut ParticipantState<M>,
+    bcast: &HashMap<u32, Round1Bcast<M>>,
     p2psend: HashMap<u32, ShamirShare>,
-) -> Result<Round2Bcast<F, G>, Round2Error> {
+) -> Result<Round2Bcast<M>, Round2Error> {
     // We should validate Wi and Ci values in Round1Bcats
     for (id, bc) in bcast.iter() {
         if bc.ci.is_zero() {
@@ -282,7 +289,7 @@ fn round_2<F: PrimeField, G: GroupElem<F>>(
         let aj0 = &bc.verifiers.commitments[0];
 
         // Compute g^{w_j}
-        let prod1 = G::generator() * bc.wi;
+        let prod1 = M::G::generator() * bc.wi;
 
         // Compute A_{j,0}^{-c_j}, and sum.
         let prod2 = *aj0 * bc.ci.invert().unwrap(); // checked nonzero
@@ -296,7 +303,7 @@ fn round_2<F: PrimeField, G: GroupElem<F>>(
         buf.extend(prod.to_bytes().as_ref());
 
         // Figure out the hash-to-field thing.
-        let cj = hash_to_field::<G::Scalar>(&buf);
+        let cj = hash_to_field::<<M::G as Group>::Scalar>(&buf);
 
         // Check equation.
         if cj != bc.ci {
@@ -315,20 +322,23 @@ fn round_2<F: PrimeField, G: GroupElem<F>>(
 
     // FIXME convert to soft error?
     // FIXME BROKEN
-    let sk_bytes = &participant.secret_shares.unwrap()[participant.id as usize].0;
-    let mut sk = G::Scalar::from_repr(sk_bytes).expect("shamir share parse as scalar failed");
+    let sk_bytes = &participant.secret_shares.as_ref().unwrap()[participant.id as usize].0;
+    let sk_repr = M::scalar_repr_from_bytes(sk_bytes).expect("shamir share parse as scalar failed");
+    let mut sk =
+        <M::G as Group>::Scalar::from_repr(sk_repr).expect("shamir share parse as scalar failed");
 
-    let mut vk: G = participant.verifier.unwrap().commitments[0];
+    let mut vk: M::G = participant.verifier.as_ref().unwrap().commitments[0];
 
     // Step 6 - Compute signing key share ski = \sum_{j=1}^n xji
-    for (id, bc) in bcast.iter() {
+    for id in bcast.keys() {
         if *id == participant.id {
             continue;
         }
 
         // FIXME convert to soft error?
         // FIXME BROKEN
-        let t2 = G::Scalar::from_repr(&p2psend[id].0).expect("p2psend parse failed");
+        let t2_repr = M::scalar_repr_from_bytes(&p2psend[id].0).expect("p2psend parse failed");
+        let t2 = <M::G as Group>::Scalar::from_repr(t2_repr).expect("p2psend parse failed");
         sk += t2;
     }
 
@@ -345,7 +355,7 @@ fn round_2<F: PrimeField, G: GroupElem<F>>(
     participant.sk_share = Some(sk);
 
     // Step 7 - Compute verification key share vki = ski*G and store.
-    let vk_share = G::generator() * sk;
+    let vk_share = M::G::generator() * sk;
     participant.vk_share = Some(vk_share);
 
     // Store verification key.
@@ -354,9 +364,5 @@ fn round_2<F: PrimeField, G: GroupElem<F>>(
     // Update round number.
     participant.round = 3;
 
-    Ok(Round2Bcast {
-        vk,
-        vk_share,
-        _pd: ::std::marker::PhantomData,
-    })
+    Ok(Round2Bcast { vk, vk_share })
 }
