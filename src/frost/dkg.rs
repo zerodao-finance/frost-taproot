@@ -32,11 +32,11 @@ struct ParticipantState<M: Math> {
     other_participant_shares: HashMap<u32, ParticipantData<M>>,
     ctx: u8, // not sure what this is, copied from the Go code
 
-    // Round 1 variables.
+    // Round 1 variables
     verifier: Option<FeldmanVerifier<<M::G as Group>::Scalar, M::G>>,
     secret_shares: Option<Vec<ShamirShare>>,
 
-    // Other variables (for unimplemented rounds)
+    // Round 2 variables
     sk_share: Option<<M::G as Group>::Scalar>,
     vk: Option<M::G>,
     vk_share: Option<M::G>,
