@@ -1,1 +1,1 @@
-pub mod dkg;
+pub mod frost;
