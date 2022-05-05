@@ -21,8 +21,8 @@ pub enum Error {
     Unimplemented,
 }
 
-struct ParticipantState<M: Math> {
-    round: u32,
+pub struct ParticipantState<M: Math> {
+    pub(crate) round: u32,
 
     // Setup variables
     id: u32,
@@ -35,9 +35,9 @@ struct ParticipantState<M: Math> {
     secret_shares: Option<Vec<ShamirShare>>,
 
     // Round 2 variables
-    sk_share: Option<<M::G as Group>::Scalar>,
-    vk: Option<M::G>,
-    vk_share: Option<M::G>,
+    pub(crate) sk_share: Option<<M::G as Group>::Scalar>,
+    pub(crate) vk: Option<M::G>,
+    pub(crate) vk_share: Option<M::G>,
 }
 
 struct ParticipantData<M: Math> {
