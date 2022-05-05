@@ -140,6 +140,15 @@ struct Round3Bcast<M: Math> {
     msg: Vec<u8>,
 }
 
+impl<M: Math> Round3Bcast<M> {
+    fn to_sig(&self) -> Signature<M> {
+        Signature {
+            z: self.z,
+            c: self.c,
+        }
+    }
+}
+
 struct Signature<M: Math> {
     z: <M::G as Group>::Scalar,
     c: <M::G as Group>::Scalar,
