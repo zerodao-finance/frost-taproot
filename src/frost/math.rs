@@ -17,6 +17,9 @@ pub trait Math {
 
     fn group_repr_from_bytes(buf: &[u8]) -> Option<<Self::G as GroupEncoding>::Repr>;
     fn group_repr_to_bytes(r: <Self::G as GroupEncoding>::Repr) -> Vec<u8>;
+
+    /// Returns if the group element is "negative".
+    fn group_point_is_negative(e: Self::G) -> bool;
 }
 
 // TODO Verify this is a valid way to do it.

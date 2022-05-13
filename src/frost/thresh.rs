@@ -8,7 +8,7 @@ use super::dkg;
 use super::math::*;
 
 #[derive(Debug, Error)]
-enum Error {
+pub enum Error {
     #[error("zero cosigners")]
     ZeroCosigners,
 
@@ -27,11 +27,11 @@ enum Error {
 
 /// In the Go code this is just a hash-to-field of the serialized inputs, so we
 /// could make this totally general and implement it for all `Math`s, it seems.
-trait ChallengeDeriver<M: Math> {
+pub trait ChallengeDeriver<M: Math> {
     fn derive_challenge(&self, msg: &[u8], pk: M::G, r: M::G) -> <M::G as Group>::Scalar;
 }
 
-struct SignerState<M: Math, C: ChallengeDeriver<M>> {
+pub struct SignerState<M: Math, C: ChallengeDeriver<M>> {
     round: u32,
 
     // Setup variables
@@ -48,7 +48,7 @@ struct SignerState<M: Math, C: ChallengeDeriver<M>> {
     challenge_deriver: C,
 }
 
-struct InnerState<M: Math> {
+pub struct InnerState<M: Math> {
     // Round 1 variables
     cap_d: Option<M::G>,
     cap_e: Option<M::G>,
@@ -80,7 +80,7 @@ impl<M: Math> Default for InnerState<M> {
 }
 
 impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
-    fn new(
+    pub fn new(
         info: dkg::ParticipantState<M>,
         id: u32,
         thresh: u32,
@@ -123,17 +123,17 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
     }
 }
 
-struct Round1Bcast<M: Math> {
+pub struct Round1Bcast<M: Math> {
     di: M::G,
     ei: M::G,
 }
 
-struct Round2Bcast<M: Math> {
+pub struct Round2Bcast<M: Math> {
     zi: <M::G as Group>::Scalar,
     vki: M::G,
 }
 
-struct Round3Bcast<M: Math> {
+pub struct Round3Bcast<M: Math> {
     r: M::G,
     z: <M::G as Group>::Scalar,
     c: <M::G as Group>::Scalar,
@@ -141,7 +141,7 @@ struct Round3Bcast<M: Math> {
 }
 
 impl<M: Math> Round3Bcast<M> {
-    fn to_sig(&self) -> Signature<M> {
+    pub fn to_sig(&self) -> Signature<M> {
         Signature {
             z: self.z,
             c: self.c,
@@ -149,13 +149,13 @@ impl<M: Math> Round3Bcast<M> {
     }
 }
 
-struct Signature<M: Math> {
+pub struct Signature<M: Math> {
     z: <M::G as Group>::Scalar,
     c: <M::G as Group>::Scalar,
 }
 
 #[derive(Debug, Error)]
-enum Round1Error {
+pub enum Round1Error {
     #[error("participant only in round {0}")]
     WrongRound(u32),
 
@@ -163,7 +163,7 @@ enum Round1Error {
     Unimplemented,
 }
 
-fn round_1<M: Math, C: ChallengeDeriver<M>>(
+pub fn round_1<M: Math, C: ChallengeDeriver<M>>(
     signer: &mut SignerState<M, C>,
     mut rng: &mut impl Rng,
 ) -> Result<Round1Bcast<M>, Round1Error> {
@@ -195,7 +195,7 @@ fn round_1<M: Math, C: ChallengeDeriver<M>>(
 }
 
 #[derive(Debug, Error)]
-enum Round2Error {
+pub enum Round2Error {
     #[error("participant only in round {0}")]
     WrongRound(u32),
 
@@ -209,7 +209,7 @@ enum Round2Error {
     Unimplemented,
 }
 
-fn round_2<M: Math, C: ChallengeDeriver<M>>(
+pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
     signer: &mut SignerState<M, C>,
     msg: Vec<u8>,
     round2_input: HashMap<u32, Round1Bcast<M>>,
@@ -277,10 +277,12 @@ fn round_2<M: Math, C: ChallengeDeriver<M>>(
     let liski = li * signer.sk_share;
     let liskic = liski * signer.state.c.unwrap();
 
-    // TODO Figure out what we have to do with this.  It's just normalizing the point for whatever reason.
-    //if signer.state.sum_r.unwrap().is_negative() {
-    //negate, so that it's positive
-    //}
+    // Normalize the point.  This math is a little screwy so make sure it's correct.
+    let sumr_unwrap = signer.state.sum_r.unwrap();
+    if M::group_point_is_negative(sumr_unwrap) {
+        // Figuring out if it's negative or not is hard.  But once we know, flipping it is easy.
+        signer.state.sum_r = Some(-sumr_unwrap);
+    }
 
     let eiri = signer.state.small_e.unwrap() * ri;
 
@@ -325,7 +327,7 @@ fn concat_hash_array<M: Math>(
 }
 
 #[derive(Debug, Error)]
-enum Round3Error {
+pub enum Round3Error {
     #[error("participant only in round {0}")]
     WrongRound(u32),
 
@@ -342,7 +344,7 @@ enum Round3Error {
     Unimplemented,
 }
 
-fn round_3<M: Math, C: ChallengeDeriver<M>>(
+pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     signer: &mut SignerState<M, C>,
     round3_input: HashMap<u32, Round2Bcast<M>>,
 ) -> Result<Round3Bcast<M>, Round3Error> {
@@ -371,7 +373,7 @@ fn round_3<M: Math, C: ChallengeDeriver<M>>(
     // Step 1-3
     // Step 1: For j in [1...t]
     let mut z = <<M::G as Group>::Scalar as Field>::zero();
-    let negate = false; // see comment above
+    let negate = M::group_point_is_negative(signer.state.sum_r.unwrap()); // TODO verify correctness
     for (id, data) in &round3_input {
         let zj = data.zi;
         let vkj = data.vki;
@@ -387,8 +389,13 @@ fn round_3<M: Math, C: ChallengeDeriver<M>>(
         let cljvkj = vkj * clj;
 
         // Rj + c*Lj*vkj
-        let rj = signer_rs[id];
-        // see comment above on negation
+        let mut rj = signer_rs[id];
+
+        // see above
+        if negate {
+            rj = -rj;
+        }
+
         let right = cljvkj + rj;
 
         // Check equation!
@@ -425,7 +432,7 @@ fn round_3<M: Math, C: ChallengeDeriver<M>>(
     })
 }
 
-fn verify<M: Math, C: ChallengeDeriver<M>>(
+pub fn verify<M: Math, C: ChallengeDeriver<M>>(
     cderiv: &C,
     vk: M::G,
     msg: &[u8],

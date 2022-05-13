@@ -47,7 +47,7 @@ struct ParticipantData<M: Math> {
 }
 
 impl<M: Math> ParticipantState<M> {
-    fn new(
+    pub fn new(
         id: u32,
         thresh: u32,
         ctx: u8,
@@ -92,21 +92,21 @@ impl<M: Math> ParticipantState<M> {
     }
 }
 
-struct Round1Bcast<M: Math> {
+pub struct Round1Bcast<M: Math> {
     verifiers: FeldmanVerifier<<M::G as Group>::Scalar, M::G>,
     wi: <M::G as Group>::Scalar,
     ci: <M::G as Group>::Scalar,
 }
 
-struct Round1Result<M: Math> {
+pub struct Round1Result<M: Math> {
     broadcast: Round1Bcast<M>,
     p2p: ShamirShare,
 }
 
-type Round1Send = HashMap<u32, ShamirShare>;
+pub type Round1Send = HashMap<u32, ShamirShare>;
 
 #[derive(Debug, Error)]
-enum Round1Error {
+pub enum Round1Error {
     #[error("wrong round {0}")]
     WrongRound(u32),
 
@@ -117,7 +117,7 @@ enum Round1Error {
     Unimplemented,
 }
 
-fn round_1<M: Math, R: RngCore + CryptoRng>(
+pub fn round_1<M: Math, R: RngCore + CryptoRng>(
     participant: &mut ParticipantState<M>,
     secret: <M::G as Group>::Scalar,
     rng: &mut R,
@@ -193,13 +193,13 @@ fn round_1<M: Math, R: RngCore + CryptoRng>(
     Ok((r1bc, p2p_send))
 }
 
-struct Round2Bcast<M: Math> {
+pub struct Round2Bcast<M: Math> {
     vk: M::G,
     vk_share: M::G,
 }
 
 #[derive(Debug, Error)]
-enum Round2Error {
+pub enum Round2Error {
     #[error("commitment is zero")]
     CommitmentZero,
 
@@ -216,7 +216,7 @@ enum Round2Error {
     PeerFeldmanVerifyFailed(u32),
 }
 
-fn round_2<M: Math>(
+pub fn round_2<M: Math>(
     participant: &mut ParticipantState<M>,
     bcast: &HashMap<u32, Round1Bcast<M>>,
     p2psend: HashMap<u32, ShamirShare>,
