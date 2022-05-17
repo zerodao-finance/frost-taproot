@@ -59,8 +59,6 @@ impl<M: Math> ParticipantState<M> {
 
         let limit = other_participants.len() + 1;
 
-        let rng = OsRng::default();
-
         let feldman = vsss_rs::Feldman {
             n: limit,
             t: thresh as usize,
@@ -147,8 +145,10 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
     let mut buf = Vec::new();
     buf.extend(u32::to_be_bytes(participant.id));
     buf.push(participant.ctx);
-    buf.extend(verifier.commitments[0].to_bytes().as_ref()); // TODO `.to_affine()`?
+    buf.extend(verifier.commitments[0].to_bytes().as_ref());
+    buf.push(0xff); // EXTRA
     buf.extend(ri.to_bytes().as_ref());
+    eprintln!("round1 {}   {}", participant.id, hex::encode(&buf));
 
     // Figure out the hash-to-field thing.
     let ci = hash_to_field::<<M::G as Group>::Scalar>(&buf);
@@ -179,8 +179,8 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
 
     // Step 7 - P2PSend f_i(j) to each participant Pj and keep (i, f_j(i)) for himself
     let mut p2p_send = HashMap::new();
-    for i in 0..participant.other_participant_shares.len() {
-        p2p_send.insert(i as u32, shares[i - 1].clone());
+    for oid in participant.other_participant_shares.keys() {
+        p2p_send.insert(*oid, shares[*oid as usize].clone());
     }
 
     // Save the things generated in step 1.
@@ -202,6 +202,9 @@ pub struct Round2Bcast<M: Math> {
 pub enum Round2Error {
     #[error("commitment is zero")]
     CommitmentZero,
+
+    #[error("commitment is the identity element")]
+    CommitmentIdentity,
 
     #[error("commitment not on curve")]
     CommitmentNotOnCurve,
@@ -225,6 +228,13 @@ pub fn round_2<M: Math>(
     for (id, bc) in bcast.iter() {
         if bc.ci.is_zero() {
             return Err(Round2Error::CommitmentZero);
+        }
+
+        for com in &bc.verifiers.commitments {
+            // TODO Add reporting for the indexes?
+            if com.is_identity().unwrap_u8() == 1 {
+                return Err(Round2Error::CommitmentIdentity);
+            }
         }
 
         // The Go code also verifies that the point is on the curve, but Rust is
@@ -253,10 +263,12 @@ pub fn round_2<M: Math>(
 
         // Now build commitment.
         let mut buf = Vec::new();
-        buf.extend(u32::to_be_bytes(participant.id));
+        buf.extend(u32::to_be_bytes(*id));
         buf.push(participant.ctx);
-        buf.extend(aj0.to_bytes().as_ref()); // TODO `.to_affine()`?
+        buf.extend(aj0.to_bytes().as_ref());
+        buf.push(0xff); // EXTRA
         buf.extend(prod.to_bytes().as_ref());
+        eprintln!("round2 {} {} {}", participant.id, id, hex::encode(&buf));
 
         // Figure out the hash-to-field thing.
         let cj = hash_to_field::<<M::G as Group>::Scalar>(&buf);

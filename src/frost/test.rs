@@ -1,8 +1,14 @@
+use std::collections::*;
+
 //use curve25519_dalek as onenine;
 
-use super::*;
-use elliptic_curve::{sec1::ToEncodedPoint, Field};
-use math::{Group, GroupEncoding, PrimeField};
+use curve25519_dalek::scalar::Scalar;
+use elliptic_curve::sec1::ToEncodedPoint;
+
+use super::{
+    dkg::{self, ParticipantState},
+    math::{self, Field, Group, GroupEncoding, PrimeField},
+};
 
 /*struct Curve25519Math;
 
@@ -86,4 +92,72 @@ impl math::Math for Secp256k1Math {
         // "high" means zero or positive here, so if it's false then it must be negative.
         y_fb.is_high().unwrap_u8() == 0
     }
+}
+
+fn test_generic_full_dkg_works<M: math::Math>() {
+    let mut p0 = ParticipantState::<M>::new(0, 2, 0xff, vec![1]).expect("test: init participant 0");
+    let mut p1 = ParticipantState::<M>::new(1, 2, 0xff, vec![0]).expect("test: init participant 1");
+
+    let mut rng = rand::thread_rng();
+
+    let p0r1_secret = <<M::G as Group>::Scalar as Field>::random(&mut rng);
+    let p1r1_secret = <<M::G as Group>::Scalar as Field>::random(&mut rng);
+
+    let (p0r1_bc, p0r1_s) = dkg::round_1(&mut p0, p0r1_secret, &mut rng).expect("test: p0 round 1");
+    let (p1r1_bc, p1r1_s) = dkg::round_1(&mut p1, p1r1_secret, &mut rng).expect("test: p1 round 1");
+
+    let mut bcast = HashMap::new();
+    bcast.insert(0, p0r1_bc);
+    bcast.insert(1, p1r1_bc);
+    eprintln!("p0s: {:?}\np1s: {:?}", p0r1_s, p1r1_s);
+
+    let mut p0inbox = HashMap::new();
+    let mut p1inbox = HashMap::new();
+    p0inbox.insert(1u32, p1r1_s[&0].clone());
+    p1inbox.insert(0u32, p0r1_s[&1].clone());
+
+    let p1r2_bc = dkg::round_2(&mut p0, &bcast, p0inbox).expect("test: p1 round 2");
+    let p2r2_bc = dkg::round_2(&mut p1, &bcast, p1inbox).expect("test: p1 round 2");
+
+    eprintln!("doing things");
+}
+
+#[test]
+fn test_full_dkg_works() {
+    test_generic_full_dkg_works::<Secp256k1Math>();
+}
+
+fn prepare_dkg_output<M: math::Math>() -> (ParticipantState<M>, ParticipantState<M>) {
+    let mut p0 = ParticipantState::<M>::new(0, 2, 42u8, vec![1]).expect("test: init participant 0");
+    let mut p1 = ParticipantState::<M>::new(1, 2, 42u8, vec![0]).expect("test: init participant 1");
+
+    let mut rng = rand::thread_rng();
+
+    let p0r1_secret = <<M::G as Group>::Scalar as Field>::random(&mut rng);
+    let p1r1_secret = <<M::G as Group>::Scalar as Field>::random(&mut rng);
+
+    let (p0r1_bc, p0r1_s) = dkg::round_1(&mut p0, p0r1_secret, &mut rng).expect("test: p0 round 1");
+    let (p1r1_bc, p1r1_s) = dkg::round_1(&mut p1, p1r1_secret, &mut rng).expect("test: p1 round 1");
+
+    let mut bcast = HashMap::new();
+    bcast.insert(0, p0r1_bc);
+    bcast.insert(1, p1r1_bc);
+    eprintln!("p0s: {:?}\np1s: {:?}", p0r1_s, p1r1_s);
+
+    let mut p0inbox = HashMap::new();
+    let mut p1inbox = HashMap::new();
+    p0inbox.insert(1u32, p1r1_s[&0].clone());
+    p1inbox.insert(0u32, p0r1_s[&1].clone());
+
+    let p1r2_bc = dkg::round_2(&mut p0, &bcast, p0inbox).expect("test: p1 round 2");
+    let p2r2_bc = dkg::round_2(&mut p1, &bcast, p1inbox).expect("test: p1 round 2");
+
+    eprintln!("doing things");
+    (p0, p1)
+}
+
+//#[test]
+fn test_prepare() {
+    let (p1, p2) = prepare_dkg_output::<Secp256k1Math>();
+    eprintln!("ok!");
 }
