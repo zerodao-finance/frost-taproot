@@ -128,6 +128,13 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
 
     // There was some stuff here but due to Rust we don't need it.
     let s = secret;
+    let sg = <M::G as Group>::generator() * s;
+    eprintln!(
+        "secret {} {:?} {}",
+        participant.id,
+        s,
+        hex::encode(sg.to_bytes().as_ref())
+    );
 
     // Step 1 - (Aj0,...Ajt), (xi1,...,xin) <- FeldmanShare(s)
     let (shares, verifier) = participant
@@ -180,7 +187,9 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
     // Step 7 - P2PSend f_i(j) to each participant Pj and keep (i, f_j(i)) for himself
     let mut p2p_send = HashMap::new();
     for oid in participant.other_participant_shares.keys() {
-        p2p_send.insert(*oid, shares[*oid as usize].clone());
+        let share = shares[*oid as usize - 1].clone();
+        eprintln!("share {} -> {}: {:?}", participant.id, oid, share);
+        p2p_send.insert(*oid, share);
     }
 
     // Save the things generated in step 1.
@@ -253,12 +262,18 @@ pub fn round_2<M: Math>(
         // Step 4 - Check equation c_j = H(j, CTX, A_{j,0}, g^{w_j}*A_{j,0}^{-c_j}
         // Get Aj0
         let aj0 = &bc.verifiers.commitments[0];
+        eprintln!(
+            "aj0 {} {} {}",
+            participant.id,
+            id,
+            hex::encode(aj0.to_bytes().as_ref())
+        );
 
         // Compute g^{w_j}
         let prod1 = M::G::generator() * bc.wi;
 
         // Compute A_{j,0}^{-c_j}, and sum.
-        let prod2 = *aj0 * bc.ci.invert().unwrap(); // checked nonzero
+        let prod2 = *aj0 * -bc.ci; // checked nonzero
         let prod = prod1 + prod2;
 
         // Now build commitment.
@@ -276,6 +291,8 @@ pub fn round_2<M: Math>(
         // Check equation.
         if cj != bc.ci {
             return Err(Round2Error::HashCheckFailed(*id));
+        } else {
+            eprintln!("they match!");
         }
 
         // Step 5 - FeldmanVerify
@@ -289,8 +306,8 @@ pub fn round_2<M: Math>(
     }
 
     // FIXME convert to soft error?
-    // FIXME BROKEN
-    let sk_bytes = &participant.secret_shares.as_ref().unwrap()[participant.id as usize].0;
+    let sk_bytes =
+        &participant.secret_shares.as_ref().unwrap()[participant.id as usize - 1].value();
     let sk_repr = M::scalar_repr_from_bytes(sk_bytes).expect("shamir share parse as scalar failed");
     let mut sk =
         <M::G as Group>::Scalar::from_repr(sk_repr).expect("shamir share parse as scalar failed");
@@ -304,8 +321,8 @@ pub fn round_2<M: Math>(
         }
 
         // FIXME convert to soft error?
-        // FIXME BROKEN
-        let t2_repr = M::scalar_repr_from_bytes(&p2psend[id].0).expect("p2psend parse failed");
+        let t2_repr =
+            M::scalar_repr_from_bytes(&p2psend[id].value()).expect("p2psend parse failed");
         let t2 = <M::G as Group>::Scalar::from_repr(t2_repr).expect("p2psend parse failed");
         sk += t2;
     }
