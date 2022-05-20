@@ -2,7 +2,7 @@ use std::collections::*;
 
 use super::{
     dkg::{self, ParticipantState},
-    math::{self, Field, Group, GroupEncoding, Math, PrimeField, Secp256k1Math},
+    math::{self, Field, Group, GroupEncoding, Math, PrimeField},
 };
 
 fn do_dkg_2of2<M: math::Math>() -> (
@@ -76,35 +76,17 @@ fn test_dkg_2of2_works() {
 
 use super::thresh;
 
-struct Secp256k1ChallengeDeriver;
-
-impl thresh::ChallengeDeriver<Secp256k1Math> for Secp256k1ChallengeDeriver {
-    fn derive_challenge(
-        &self,
-        msg: &[u8],
-        pk: <Secp256k1Math as math::Math>::G,
-        r: <Secp256k1Math as math::Math>::G,
-    ) -> <<Secp256k1Math as math::Math>::G as Group>::Scalar {
-        let mut buf = msg.to_vec();
-        buf.extend(Secp256k1Math::group_repr_to_bytes(pk.to_bytes()));
-        buf.extend(Secp256k1Math::group_repr_to_bytes(r.to_bytes()));
-        math::hash_to_field(&buf)
-    }
-}
-
-fn do_test_signers() {
-    let (p1, _, p2, _) = do_dkg_2of2::<Secp256k1Math>();
+fn do_test_signers<M: Math>() {
+    let (p1, _, p2, _) = do_dkg_2of2::<M>();
     let p1vk = p1.vk.unwrap();
 
     let lcoeffs1 = thresh::gen_lagrange_coefficients(2, 2, &[1, 2]);
     let lcoeffs2 = lcoeffs1.clone();
 
-    let mut s1 =
-        thresh::SignerState::new(p1, 1, 2, lcoeffs1, vec![1, 2], Secp256k1ChallengeDeriver)
-            .expect("test: init signer 1");
-    let mut s2 =
-        thresh::SignerState::new(p2, 2, 2, lcoeffs2, vec![1, 2], Secp256k1ChallengeDeriver)
-            .expect("test: init signer 2");
+    let mut s1 = thresh::SignerState::new(p1, 1, 2, lcoeffs1, vec![1, 2], thresh::UniversalChderiv)
+        .expect("test: init signer 1");
+    let mut s2 = thresh::SignerState::new(p2, 2, 2, lcoeffs2, vec![1, 2], thresh::UniversalChderiv)
+        .expect("test: init signer 2");
 
     let mut rng = rand::thread_rng();
 
@@ -136,7 +118,7 @@ fn do_test_signers() {
 
     // Assert the signature is correct.
     assert!(thresh::verify(
-        &Secp256k1ChallengeDeriver,
+        &thresh::UniversalChderiv,
         p1vk,
         &msg,
         &s1_sig
@@ -145,5 +127,5 @@ fn do_test_signers() {
 
 #[test]
 fn test_thresh_sign() {
-    do_test_signers();
+    do_test_signers::<math::Secp256k1Math>();
 }

@@ -33,6 +33,17 @@ pub trait ChallengeDeriver<M: Math> {
     fn derive_challenge(&self, msg: &[u8], pk: M::G, r: M::G) -> <M::G as Group>::Scalar;
 }
 
+pub struct UniversalChderiv;
+
+impl<M: Math> ChallengeDeriver<M> for UniversalChderiv {
+    fn derive_challenge(&self, msg: &[u8], pk: M::G, r: M::G) -> <M::G as Group>::Scalar {
+        let mut buf = msg.to_vec();
+        buf.extend(M::group_repr_to_bytes(pk.to_bytes()));
+        buf.extend(M::group_repr_to_bytes(r.to_bytes()));
+        hash_to_field(&buf)
+    }
+}
+
 pub struct SignerState<M: Math, C: ChallengeDeriver<M>> {
     round: u32,
 
