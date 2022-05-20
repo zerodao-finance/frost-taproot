@@ -7,7 +7,7 @@ use elliptic_curve::sec1::ToEncodedPoint;
 
 use super::{
     dkg::{self, ParticipantState},
-    math::{self, Field, Group, GroupEncoding, PrimeField},
+    math::{self, Field, Group, GroupEncoding, Math, PrimeField},
 };
 
 /*struct Curve25519Math;
@@ -45,6 +45,7 @@ impl math::Math for Curve25519Math {
     }
 }*/
 
+#[derive(Clone, Debug)]
 struct Secp256k1Math;
 
 impl math::Math for Secp256k1Math {
@@ -138,7 +139,7 @@ fn do_dkg_2of2<M: math::Math>() -> (
     let p2_sk_share = p2.sk_share.unwrap();
     p2_s_bytes.extend(M::scalar_repr_to_bytes(p2_sk_share.to_repr()).as_slice());
     let p2_sk_ss =
-        vsss_rs::Share::try_from(p2_s_bytes.as_slice()).expect("test: p1 parse sk_share bytes");
+        vsss_rs::Share::try_from(p2_s_bytes.as_slice()).expect("test: p2 parse sk_share bytes");
 
     // Recombine them to the "real" sk.
     let shamir = vsss_rs::Shamir { t: 2, n: 2 };
@@ -163,8 +164,76 @@ fn test_dkg_2of2_works() {
     do_dkg_2of2::<Secp256k1Math>();
 }
 
-//#[test]
-fn test_signing_2of2_works() {
-    let (p1, p1r2_bc, p2, p2r2_bc) = do_dkg_2of2::<Secp256k1Math>();
-    eprintln!("ok!");
+use super::thresh;
+
+struct Secp256k1ChallengeDeriver;
+
+impl thresh::ChallengeDeriver<Secp256k1Math> for Secp256k1ChallengeDeriver {
+    fn derive_challenge(
+        &self,
+        msg: &[u8],
+        pk: <Secp256k1Math as math::Math>::G,
+        r: <Secp256k1Math as math::Math>::G,
+    ) -> <<Secp256k1Math as math::Math>::G as Group>::Scalar {
+        let mut buf = msg.to_vec();
+        buf.extend(Secp256k1Math::group_repr_to_bytes(pk.to_bytes()));
+        buf.extend(Secp256k1Math::group_repr_to_bytes(r.to_bytes()));
+        math::hash_to_field(&buf)
+    }
+}
+
+fn do_test_signers() {
+    let (p1, _, p2, _) = do_dkg_2of2::<Secp256k1Math>();
+    let p1vk = p1.vk.unwrap();
+
+    let lcoeffs1 = thresh::gen_lagrange_coefficients(2, 2, &[1, 2]);
+    let lcoeffs2 = lcoeffs1.clone();
+
+    let mut s1 =
+        thresh::SignerState::new(p1, 1, 2, lcoeffs1, vec![1, 2], Secp256k1ChallengeDeriver)
+            .expect("test: init signer 1");
+    let mut s2 =
+        thresh::SignerState::new(p2, 2, 2, lcoeffs2, vec![1, 2], Secp256k1ChallengeDeriver)
+            .expect("test: init signer 2");
+
+    let mut rng = rand::thread_rng();
+
+    let s1r1_bc = thresh::round_1(&mut s1, &mut rng).expect("test: s1 round 1");
+    let s2r1_bc = thresh::round_1(&mut s2, &mut rng).expect("test: s2 round 1");
+
+    let mut r1_bcast = HashMap::new();
+    r1_bcast.insert(1, s1r1_bc);
+    r1_bcast.insert(2, s2r1_bc);
+    let r1_bcast2 = r1_bcast.clone();
+
+    let msg = hex::decode("cafebabe13371337deadbeef01234567").expect("test: parse message");
+
+    let s1r2_bc = thresh::round_2(&mut s1, msg.clone(), r1_bcast).expect("test: s1 round 2");
+    let s2r2_bc = thresh::round_2(&mut s2, msg.clone(), r1_bcast2).expect("test: s2 round 2");
+
+    let mut r2_bcast = HashMap::new();
+    r2_bcast.insert(1, s1r2_bc);
+    r2_bcast.insert(2, s2r2_bc);
+    let r2_bcast2 = r2_bcast.clone();
+
+    let s1r3_bc = thresh::round_3(&mut s1, r2_bcast).expect("test: s1 round 3");
+    let s2r3_bc = thresh::round_3(&mut s2, r2_bcast2).expect("test: s2 round 3");
+
+    // Assert we get the same signatures on both sides.
+    let s1_sig = s1r3_bc.to_sig();
+    let s2_sig = s2r3_bc.to_sig();
+    assert_eq!(s1_sig, s2_sig);
+
+    // Assert the signature is correct.
+    assert!(thresh::verify(
+        &Secp256k1ChallengeDeriver,
+        p1vk,
+        &msg,
+        &s1_sig
+    ));
+}
+
+#[test]
+fn test_thresh_sign() {
+    do_test_signers();
 }

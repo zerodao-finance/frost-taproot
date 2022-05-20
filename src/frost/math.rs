@@ -6,7 +6,7 @@ use rand::SeedableRng;
 pub use ec::group::{Curve, Group, GroupEncoding, ScalarMul};
 pub use ec::ScalarArithmetic;
 
-pub trait Math {
+pub trait Math: Clone {
     type F: PrimeField;
     type G: Curve + GroupEncoding + Default + ScalarMul<Self::F>;
 

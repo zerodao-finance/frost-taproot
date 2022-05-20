@@ -15,7 +15,10 @@ pub enum Error {
     #[error("threshold out of bounds")]
     ThreshOob,
 
-    #[error("coefficients list mismatch with cosigners list")]
+    #[error("coefficients list mismatch length with cosigners list ({0} != {1})")]
+    CoeffsCosignersMismatchCount(usize, usize),
+
+    #[error("coefficients list mismatch with cosigners list)")]
     CoeffsCosignersMismatch,
 
     #[error("participant only in round {0}")]
@@ -101,7 +104,10 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
         }
 
         if lcoeffs.len() != cosigners.len() {
-            return Err(Error::CoeffsCosignersMismatch);
+            return Err(Error::CoeffsCosignersMismatchCount(
+                lcoeffs.len(),
+                cosigners.len(),
+            ));
         }
 
         if !cosigners.iter().all(|id| lcoeffs.contains_key(id)) {
@@ -123,11 +129,13 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
     }
 }
 
+#[derive(Clone)]
 pub struct Round1Bcast<M: Math> {
     di: M::G,
     ei: M::G,
 }
 
+#[derive(Clone)]
 pub struct Round2Bcast<M: Math> {
     zi: <M::G as Group>::Scalar,
     vki: M::G,
@@ -149,9 +157,26 @@ impl<M: Math> Round3Bcast<M> {
     }
 }
 
+#[derive(Clone)]
 pub struct Signature<M: Math> {
     z: <M::G as Group>::Scalar,
     c: <M::G as Group>::Scalar,
+}
+
+use std::fmt;
+
+impl<M: Math> fmt::Debug for Signature<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let z_hex = hex::encode(M::scalar_repr_to_bytes(self.z.to_repr()));
+        let c_hex = hex::encode(M::scalar_repr_to_bytes(self.c.to_repr()));
+        f.write_fmt(format_args!("{}.{}", z_hex, c_hex))
+    }
+}
+
+impl<M: Math> PartialEq for Signature<M> {
+    fn eq(&self, other: &Self) -> bool {
+        (self.z == other.z) && (self.c == other.c)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -408,7 +433,7 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
 
     // Step 4 - 7: Self verify the signature (z, c)
     let zg = <M::G as Group>::generator() * z;
-    let cvk = signer.vk * signer_c.invert().unwrap(); // TODO verify math correct
+    let cvk = signer.vk * -signer_c; // additive not multiplicative!
     let tmp_r = zg + cvk;
 
     // Step 6 - c' = H(m, R')
@@ -418,6 +443,11 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
 
     // Step 7 - Check c = c'
     if tmp_c != signer_c {
+        eprintln!(
+            "tmp {}\nsig {}",
+            hex::encode(tmp_c.to_repr()),
+            hex::encode(signer_c.to_repr())
+        );
         return Err(Round3Error::InvalidSignature);
     }
 
@@ -440,11 +470,7 @@ pub fn verify<M: Math, C: ChallengeDeriver<M>>(
 ) -> bool {
     // R' = z*G - c*vk
     let zg = <M::G as Group>::generator() * sig.z;
-    let cinv = sig.c.invert();
-    if cinv.is_none().unwrap_u8() == 1 {
-        return false;
-    }
-    let cvk = vk * cinv.unwrap();
+    let cvk = vk * -sig.c; // additive not multiplicative!
     let tmp_r = zg + cvk;
 
     //c' = H(m, R')
@@ -452,4 +478,59 @@ pub fn verify<M: Math, C: ChallengeDeriver<M>>(
 
     // Check c == c'
     tmp_c == sig.c
+}
+
+fn mult_u32<F: Field>(n: u32) -> F {
+    let mut val = F::one();
+    let mut sum = F::zero();
+
+    for i in 0..31 {
+        let b = (n >> i) & 0x01;
+
+        if b == 1 {
+            sum += val;
+        }
+
+        val = val.double();
+    }
+
+    sum
+}
+
+pub fn gen_lagrange_coefficients<F: Field>(
+    limit: u32,
+    thresh: u32,
+    idents: &[u32],
+) -> HashMap<u32, F> {
+    let mut coeffs = HashMap::new();
+
+    for (i, xi) in idents.iter().enumerate() {
+        let xi_f = mult_u32::<F>(*xi);
+
+        let mut num = F::one();
+        let mut den = F::one();
+
+        for (j, xj) in idents.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+
+            let xj_f = mult_u32::<F>(*xj);
+
+            num *= xj_f;
+            den *= xj_f - xi_f;
+        }
+
+        if den.is_zero() {
+            panic!(
+                "divide by zero! limit={}, thresh={}, idents={:?}",
+                limit, thresh, idents,
+            );
+        }
+
+        let res = num * den.invert().unwrap();
+        coeffs.insert(*xi as u32, res);
+    }
+
+    coeffs
 }
