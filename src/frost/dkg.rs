@@ -27,7 +27,7 @@ pub struct ParticipantState<M: Math> {
     id: u32,
     feldman: Feldman,
     other_participant_shares: HashMap<u32, ParticipantData<M>>,
-    ctx: u8, // not sure what this is, copied from the Go code
+    ctx: Vec<u8>,
 
     // Round 1 variables
     verifier: Option<FeldmanVerifier<<M::G as Group>::Scalar, M::G>>,
@@ -49,7 +49,7 @@ impl<M: Math> ParticipantState<M> {
     pub fn new(
         id: u32,
         thresh: u32,
-        ctx: u8,
+        ctx: Vec<u8>,
         other_participants: Vec<u32>,
     ) -> Result<ParticipantState<M>, Error> {
         if other_participants.is_empty() {
@@ -150,7 +150,8 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
     // Step 4 - Compute Ci = H(i, CTX, g^{a_(i,0)}, R_i), where CTX is fixed context string
     let mut buf = Vec::new();
     buf.extend(u32::to_be_bytes(participant.id));
-    buf.push(participant.ctx);
+    buf.extend(u64::to_be_bytes(participant.ctx.len() as u64));
+    buf.extend(&participant.ctx);
     buf.extend(verifier.commitments[0].to_bytes().as_ref());
     buf.push(0xff); // EXTRA
     buf.extend(ri.to_bytes().as_ref());
@@ -278,7 +279,8 @@ pub fn round_2<M: Math>(
         // Now build commitment.
         let mut buf = Vec::new();
         buf.extend(u32::to_be_bytes(*id));
-        buf.push(participant.ctx);
+        buf.extend(u64::to_be_bytes(participant.ctx.len() as u64));
+        buf.extend(&participant.ctx);
         buf.extend(aj0.to_bytes().as_ref());
         buf.push(0xff); // EXTRA
         buf.extend(prod.to_bytes().as_ref());
