@@ -1,4 +1,4 @@
-mod math;
+pub mod math;
 
 pub mod dkg;
 pub mod thresh;

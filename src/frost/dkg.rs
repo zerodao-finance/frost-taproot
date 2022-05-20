@@ -231,10 +231,10 @@ pub enum Round2Error {
 pub fn round_2<M: Math>(
     participant: &mut ParticipantState<M>,
     bcast: &HashMap<u32, Round1Bcast<M>>,
-    p2psend: HashMap<u32, ShamirShare>,
+    p2psend: &HashMap<u32, ShamirShare>,
 ) -> Result<Round2Bcast<M>, Round2Error> {
     // We should validate Wi and Ci values in Round1Bcats
-    for (id, bc) in bcast.iter() {
+    for (_id, bc) in bcast.iter() {
         if bc.ci.is_zero() {
             return Err(Round2Error::CommitmentZero);
         }

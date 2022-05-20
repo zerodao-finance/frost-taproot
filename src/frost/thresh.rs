@@ -246,8 +246,8 @@ pub enum Round2Error {
 
 pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
     signer: &mut SignerState<M, C>,
-    msg: Vec<u8>,
-    round2_input: HashMap<u32, Round1Bcast<M>>,
+    msg: &[u8],
+    round2_input: &HashMap<u32, Round1Bcast<M>>,
 ) -> Result<Round2Bcast<M>, Round2Error> {
     if signer.round != 1 {
         return Err(Round2Error::WrongRound(signer.round));
@@ -278,7 +278,7 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
     let mut r = <M::G as Group>::identity();
     let mut ri = <<M::G as Group>::Scalar as Field>::zero();
     let mut rs = HashMap::<u32, M::G>::new();
-    for (id, data) in &round2_input {
+    for (id, data) in round2_input {
         // Construct the blob (j, m, {Dj, Ej})
         let blob = concat_hash_array(*id, &msg, &round2_input, &signer.cosigners);
 
@@ -326,7 +326,7 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
 
     // Update round number and store message
     signer.round = 2;
-    signer.state.msg = Some(msg);
+    signer.state.msg = Some(msg.to_vec());
 
     // Clear small_d and small_e since they're one-time use.
     signer.state.small_d = None;
@@ -381,7 +381,7 @@ pub enum Round3Error {
 
 pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     signer: &mut SignerState<M, C>,
-    round3_input: HashMap<u32, Round2Bcast<M>>,
+    round3_input: &HashMap<u32, Round2Bcast<M>>,
 ) -> Result<Round3Bcast<M>, Round3Error> {
     if signer.round != 2 {
         return Err(Round3Error::WrongRound(signer.round));
@@ -409,7 +409,7 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     // Step 1: For j in [1...t]
     let mut z = <<M::G as Group>::Scalar as Field>::zero();
     let negate = M::group_point_is_negative(signer.state.sum_r.unwrap()); // TODO verify correctness
-    for (id, data) in &round3_input {
+    for (id, data) in round3_input {
         let zj = data.zi;
         let vkj = data.vki;
 
@@ -490,23 +490,30 @@ pub fn verify<M: Math, C: ChallengeDeriver<M>>(
     tmp_c == sig.c
 }
 
+/// Basically just gets a version of a number in the scalar field since we can't
+/// rely on it to have native conversions from normal Rust ints.  This isn't
+/// fast but we don't do it often so it's probably ok.  Maybe we should make a
+/// version that precomputes the table.
 fn mult_u32<F: Field>(n: u32) -> F {
-    let mut val = F::one();
+    let mut cur = F::one();
     let mut sum = F::zero();
 
     for i in 0..31 {
         let b = (n >> i) & 0x01;
 
         if b == 1 {
-            sum += val;
+            sum += cur;
         }
 
-        val = val.double();
+        cur = cur.double();
     }
 
     sum
 }
 
+/// Computes the Lagrange coefficients for a given SSS polynomial, *thing*.  I
+/// don't totally understand what it's doing but vsss_rs didn't seem to have an
+/// exact coordinate in its polynomial code.
 pub fn gen_lagrange_coefficients<F: Field>(
     limit: u32,
     thresh: u32,

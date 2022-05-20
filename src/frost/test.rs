@@ -11,8 +11,10 @@ fn do_dkg_2of2<M: math::Math>() -> (
     dkg::ParticipantState<M>,
     dkg::Round2Bcast<M>,
 ) {
-    let mut p1 = ParticipantState::<M>::new(1, 2, 0xff, vec![2]).expect("test: init participant 1");
-    let mut p2 = ParticipantState::<M>::new(2, 2, 0xff, vec![1]).expect("test: init participant 2");
+    let mut p1 =
+        ParticipantState::<M>::new(1, 2, vec![0xff], vec![2]).expect("test: init participant 1");
+    let mut p2 =
+        ParticipantState::<M>::new(2, 2, vec![0xff], vec![1]).expect("test: init participant 2");
 
     let mut rng = rand::thread_rng();
 
@@ -32,8 +34,8 @@ fn do_dkg_2of2<M: math::Math>() -> (
     p1inbox.insert(2u32, p2r1_s[&1].clone());
     p2inbox.insert(1u32, p1r1_s[&2].clone());
 
-    let p1r2_bc = dkg::round_2(&mut p1, &bcast, p1inbox).expect("test: p1 round 2");
-    let p2r2_bc = dkg::round_2(&mut p2, &bcast, p2inbox).expect("test: p2 round 2");
+    let p1r2_bc = dkg::round_2(&mut p1, &bcast, &p1inbox).expect("test: p1 round 2");
+    let p2r2_bc = dkg::round_2(&mut p2, &bcast, &p2inbox).expect("test: p2 round 2");
 
     // Make sure they get the same pubkey.
     let p1_vk = p1.vk.unwrap();
@@ -76,7 +78,7 @@ fn test_dkg_2of2_works() {
 
 use super::thresh;
 
-fn do_test_signers<M: Math>() {
+fn do_thresh_sign_2of2<M: Math>() {
     let (p1, _, p2, _) = do_dkg_2of2::<M>();
     let p1vk = p1.vk.unwrap();
 
@@ -96,20 +98,18 @@ fn do_test_signers<M: Math>() {
     let mut r1_bcast = HashMap::new();
     r1_bcast.insert(1, s1r1_bc);
     r1_bcast.insert(2, s2r1_bc);
-    let r1_bcast2 = r1_bcast.clone();
 
     let msg = hex::decode("cafebabe13371337deadbeef01234567").expect("test: parse message");
 
-    let s1r2_bc = thresh::round_2(&mut s1, msg.clone(), r1_bcast).expect("test: s1 round 2");
-    let s2r2_bc = thresh::round_2(&mut s2, msg.clone(), r1_bcast2).expect("test: s2 round 2");
+    let s1r2_bc = thresh::round_2(&mut s1, &msg, &r1_bcast).expect("test: s1 round 2");
+    let s2r2_bc = thresh::round_2(&mut s2, &msg, &r1_bcast).expect("test: s2 round 2");
 
     let mut r2_bcast = HashMap::new();
     r2_bcast.insert(1, s1r2_bc);
     r2_bcast.insert(2, s2r2_bc);
-    let r2_bcast2 = r2_bcast.clone();
 
-    let s1r3_bc = thresh::round_3(&mut s1, r2_bcast).expect("test: s1 round 3");
-    let s2r3_bc = thresh::round_3(&mut s2, r2_bcast2).expect("test: s2 round 3");
+    let s1r3_bc = thresh::round_3(&mut s1, &r2_bcast).expect("test: s1 round 3");
+    let s2r3_bc = thresh::round_3(&mut s2, &r2_bcast).expect("test: s2 round 3");
 
     // Assert we get the same signatures on both sides.
     let s1_sig = s1r3_bc.to_sig();
@@ -126,6 +126,6 @@ fn do_test_signers<M: Math>() {
 }
 
 #[test]
-fn test_thresh_sign() {
-    do_test_signers::<math::Secp256k1Math>();
+fn test_thresh_sign_2of2_works() {
+    do_thresh_sign_2of2::<math::Secp256k1Math>();
 }
