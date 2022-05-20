@@ -69,7 +69,7 @@ pub struct InnerState<M: Math> {
     small_e: Option<<M::G as Group>::Scalar>,
 
     // Round 2 variables
-    commitments: Option<HashMap<u32, Round1Bcast<M>>>,
+    pub commitments: Option<HashMap<u32, Round1Bcast<M>>>,
     msg: Option<Vec<u8>>,
     c: Option<<M::G as Group>::Scalar>,
     cap_rs: Option<HashMap<u32, M::G>>,
@@ -141,21 +141,21 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
 
 #[derive(Clone)]
 pub struct Round1Bcast<M: Math> {
-    di: M::G,
-    ei: M::G,
+    pub di: M::G,
+    pub ei: M::G,
 }
 
 #[derive(Clone)]
 pub struct Round2Bcast<M: Math> {
-    zi: <M::G as Group>::Scalar,
-    vki: M::G,
+    pub zi: <M::G as Group>::Scalar,
+    pub vki: M::G,
 }
 
 pub struct Round3Bcast<M: Math> {
-    r: M::G,
-    z: <M::G as Group>::Scalar,
-    c: <M::G as Group>::Scalar,
-    msg: Vec<u8>,
+    pub r: M::G,
+    pub z: <M::G as Group>::Scalar,
+    pub c: <M::G as Group>::Scalar,
+    pub msg: Vec<u8>,
 }
 
 impl<M: Math> Round3Bcast<M> {

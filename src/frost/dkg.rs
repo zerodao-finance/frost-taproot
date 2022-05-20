@@ -39,8 +39,9 @@ pub struct ParticipantState<M: Math> {
     pub(crate) vk_share: Option<M::G>,
 }
 
+// TODO Decide how much of this we actually need.
+#[allow(unused)]
 struct ParticipantData<M: Math> {
-    id: u32,
     share: Option<ShamirShare>,
     verifiers: Option<FeldmanVerifier<<M::G as Group>::Scalar, M::G>>,
 }
@@ -66,7 +67,6 @@ impl<M: Math> ParticipantState<M> {
         let mut other_participant_shares = HashMap::new();
         for opid in other_participants {
             let pd: ParticipantData<M> = ParticipantData {
-                id: opid,
                 share: None,
                 verifiers: None,
             };
@@ -96,8 +96,8 @@ pub struct Round1Bcast<M: Math> {
 }
 
 pub struct Round1Result<M: Math> {
-    broadcast: Round1Bcast<M>,
-    p2p: ShamirShare,
+    pub broadcast: Round1Bcast<M>,
+    pub p2p: ShamirShare,
 }
 
 pub type Round1Send = HashMap<u32, ShamirShare>;
@@ -203,8 +203,8 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
 }
 
 pub struct Round2Bcast<M: Math> {
-    vk: M::G,
-    vk_share: M::G,
+    pub vk: M::G,
+    pub vk_share: M::G,
 }
 
 #[derive(Debug, Error)]
