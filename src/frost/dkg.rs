@@ -2,13 +2,12 @@ use std::collections::*;
 
 use elliptic_curve as ec;
 use ff::{Field, PrimeField};
-use rand::{rngs::OsRng, CryptoRng, Rng, RngCore};
+use rand::{CryptoRng, RngCore};
 use thiserror::Error;
+use vsss_rs::Share as ShamirShare;
 use vsss_rs::{Feldman, FeldmanVerifier};
-use vsss_rs::{Shamir, Share as ShamirShare};
 
-use ec::group::{Curve, Group, GroupEncoding, ScalarMul};
-use ec::ScalarArithmetic;
+use ec::group::{Group, GroupEncoding};
 
 use super::math::*;
 
