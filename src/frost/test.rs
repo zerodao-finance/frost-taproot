@@ -124,6 +124,37 @@ fn do_dkg_2of2<M: math::Math>() -> (
     let p1r2_bc = dkg::round_2(&mut p1, &bcast, p1inbox).expect("test: p1 round 2");
     let p2r2_bc = dkg::round_2(&mut p2, &bcast, p2inbox).expect("test: p2 round 2");
 
+    // Make sure they get the same pubkey.
+    let p1_vk = p1.vk.unwrap();
+    assert_eq!(p1_vk, p2.vk.unwrap());
+
+    // Extract and parse the shares.
+    let mut p1_s_bytes = vec![1];
+    let p1_sk_share = p1.sk_share.unwrap();
+    p1_s_bytes.extend(M::scalar_repr_to_bytes(p1_sk_share.to_repr()).as_slice());
+    let p1_sk_ss =
+        vsss_rs::Share::try_from(p1_s_bytes.as_slice()).expect("test: p1 parse sk_share bytes");
+    let mut p2_s_bytes = vec![2];
+    let p2_sk_share = p2.sk_share.unwrap();
+    p2_s_bytes.extend(M::scalar_repr_to_bytes(p2_sk_share.to_repr()).as_slice());
+    let p2_sk_ss =
+        vsss_rs::Share::try_from(p2_s_bytes.as_slice()).expect("test: p1 parse sk_share bytes");
+
+    // Recombine them to the "real" sk.
+    let shamir = vsss_rs::Shamir { t: 2, n: 2 };
+    let sk = shamir
+        .combine_shares::<M::F>(&[p1_sk_ss, p2_sk_ss])
+        .expect("test: parse sk_share");
+
+    // Compute the pubkey and see if it's right.
+    let pk = <M::G as Group>::generator() * sk;
+    eprintln!(
+        "p1 vk   {}\nreal pk {}",
+        hex::encode(p1_vk.to_bytes()),
+        hex::encode(pk.to_bytes())
+    );
+    assert_eq!(p1_vk, pk);
+
     (p1, p1r2_bc, p2, p2r2_bc)
 }
 
