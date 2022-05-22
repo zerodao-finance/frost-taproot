@@ -1,28 +1,31 @@
 use std::collections::*;
 
 use super::{
-    dkg::{self, ParticipantState},
+    dkg::{self, InitParticipantState, R1ParticipantState, R2ParticipantState},
     math::{self, Field, Group, GroupEncoding, Math, PrimeField},
+    thresh::{self, SignerState},
 };
 
 fn do_dkg_2of2<M: math::Math>() -> (
-    dkg::ParticipantState<M>,
+    dkg::R2ParticipantState<M>,
     dkg::Round2Bcast<M>,
-    dkg::ParticipantState<M>,
+    dkg::R2ParticipantState<M>,
     dkg::Round2Bcast<M>,
 ) {
-    let mut p1 =
-        ParticipantState::<M>::new(1, 2, vec![0xff], vec![2]).expect("test: init participant 1");
-    let mut p2 =
-        ParticipantState::<M>::new(2, 2, vec![0xff], vec![1]).expect("test: init participant 2");
+    let ip1 = InitParticipantState::<M>::new(1, 2, vec![0xff], vec![2])
+        .expect("test: init participant 1");
+    let ip2 = InitParticipantState::<M>::new(2, 2, vec![0xff], vec![1])
+        .expect("test: init participant 2");
 
     let mut rng = rand::thread_rng();
 
     let p1r1_secret = <<M::G as Group>::Scalar as Field>::random(&mut rng);
     let p2r1_secret = <<M::G as Group>::Scalar as Field>::random(&mut rng);
 
-    let (p1r1_bc, p1r1_s) = dkg::round_1(&mut p1, p1r1_secret, &mut rng).expect("test: p1 round 1");
-    let (p2r1_bc, p2r1_s) = dkg::round_1(&mut p2, p2r1_secret, &mut rng).expect("test: p2 round 1");
+    let (r1p1, p1r1_bc, p1r1_s) =
+        dkg::round_1(&ip1, p1r1_secret, &mut rng).expect("test: p1 round 1");
+    let (r1p2, p2r1_bc, p2r1_s) =
+        dkg::round_1(&ip2, p2r1_secret, &mut rng).expect("test: p2 round 1");
 
     let mut bcast = HashMap::new();
     bcast.insert(1, p1r1_bc);
@@ -34,21 +37,21 @@ fn do_dkg_2of2<M: math::Math>() -> (
     p1inbox.insert(2u32, p2r1_s[&1].clone());
     p2inbox.insert(1u32, p1r1_s[&2].clone());
 
-    let p1r2_bc = dkg::round_2(&mut p1, &bcast, &p1inbox).expect("test: p1 round 2");
-    let p2r2_bc = dkg::round_2(&mut p2, &bcast, &p2inbox).expect("test: p2 round 2");
+    let (r2p1, p1r2_bc) = dkg::round_2(&r1p1, &bcast, &p1inbox).expect("test: p1 round 2");
+    let (r2p2, p2r2_bc) = dkg::round_2(&r1p2, &bcast, &p2inbox).expect("test: p2 round 2");
 
     // Make sure they get the same pubkey.
-    let p1_vk = p1.vk.unwrap();
-    assert_eq!(p1_vk, p2.vk.unwrap());
+    let p1_vk = r2p1.vk;
+    assert_eq!(p1_vk, r2p2.vk);
 
     // Extract and parse the shares.
     let mut p1_s_bytes = vec![1];
-    let p1_sk_share = p1.sk_share.unwrap();
+    let p1_sk_share = r2p1.sk_share;
     p1_s_bytes.extend(M::scalar_repr_to_bytes(p1_sk_share.to_repr()).as_slice());
     let p1_sk_ss =
         vsss_rs::Share::try_from(p1_s_bytes.as_slice()).expect("test: p1 parse sk_share bytes");
     let mut p2_s_bytes = vec![2];
-    let p2_sk_share = p2.sk_share.unwrap();
+    let p2_sk_share = r2p2.sk_share;
     p2_s_bytes.extend(M::scalar_repr_to_bytes(p2_sk_share.to_repr()).as_slice());
     let p2_sk_ss =
         vsss_rs::Share::try_from(p2_s_bytes.as_slice()).expect("test: p2 parse sk_share bytes");
@@ -68,7 +71,7 @@ fn do_dkg_2of2<M: math::Math>() -> (
     );
     assert_eq!(p1_vk, pk);
 
-    (p1, p1r2_bc, p2, p2r2_bc)
+    (r2p1, p1r2_bc, r2p2, p2r2_bc)
 }
 
 #[test]
@@ -76,24 +79,22 @@ fn test_dkg_2of2_works() {
     do_dkg_2of2::<math::Secp256k1Math>();
 }
 
-use super::thresh;
-
 fn do_thresh_sign_2of2<M: Math>() {
     let (p1, _, p2, _) = do_dkg_2of2::<M>();
-    let p1vk = p1.vk.unwrap();
+    let p1vk = p1.vk;
 
     let lcoeffs1 = thresh::gen_lagrange_coefficients(2, 2, &[1, 2]);
     let lcoeffs2 = lcoeffs1.clone();
 
-    let mut s1 = thresh::SignerState::new(p1, 1, 2, lcoeffs1, vec![1, 2], thresh::UniversalChderiv)
+    let is1 = thresh::SignerState::new(&p1, 1, 2, lcoeffs1, vec![1, 2], thresh::UniversalChderiv)
         .expect("test: init signer 1");
-    let mut s2 = thresh::SignerState::new(p2, 2, 2, lcoeffs2, vec![1, 2], thresh::UniversalChderiv)
+    let is2 = thresh::SignerState::new(&p2, 2, 2, lcoeffs2, vec![1, 2], thresh::UniversalChderiv)
         .expect("test: init signer 2");
 
     let mut rng = rand::thread_rng();
 
-    let s1r1_bc = thresh::round_1(&mut s1, &mut rng).expect("test: s1 round 1");
-    let s2r1_bc = thresh::round_1(&mut s2, &mut rng).expect("test: s2 round 1");
+    let (r1s1, s1r1_bc) = thresh::round_1(&is1, &mut rng).expect("test: s1 round 1");
+    let (r1s2, s2r1_bc) = thresh::round_1(&is2, &mut rng).expect("test: s2 round 1");
 
     let mut r1_bcast = HashMap::new();
     r1_bcast.insert(1, s1r1_bc);
@@ -101,15 +102,15 @@ fn do_thresh_sign_2of2<M: Math>() {
 
     let msg = hex::decode("cafebabe13371337deadbeef01234567").expect("test: parse message");
 
-    let s1r2_bc = thresh::round_2(&mut s1, &msg, &r1_bcast).expect("test: s1 round 2");
-    let s2r2_bc = thresh::round_2(&mut s2, &msg, &r1_bcast).expect("test: s2 round 2");
+    let (r2s1, s1r2_bc) = thresh::round_2(&r1s1, &msg, &r1_bcast).expect("test: s1 round 2");
+    let (r2s2, s2r2_bc) = thresh::round_2(&r1s2, &msg, &r1_bcast).expect("test: s2 round 2");
 
     let mut r2_bcast = HashMap::new();
     r2_bcast.insert(1, s1r2_bc);
     r2_bcast.insert(2, s2r2_bc);
 
-    let s1r3_bc = thresh::round_3(&mut s1, &r2_bcast).expect("test: s1 round 3");
-    let s2r3_bc = thresh::round_3(&mut s2, &r2_bcast).expect("test: s2 round 3");
+    let (r3s1, s1r3_bc) = thresh::round_3(&r2s1, &r2_bcast).expect("test: s1 round 3");
+    let (r3s2, s2r3_bc) = thresh::round_3(&r2s2, &r2_bcast).expect("test: s2 round 3");
 
     // Assert we get the same signatures on both sides.
     let s1_sig = s1r3_bc.to_sig();

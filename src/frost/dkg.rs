@@ -20,9 +20,15 @@ pub enum Error {
     Unimplemented,
 }
 
-pub struct ParticipantState<M: Math> {
-    pub(crate) round: u32,
+pub struct InitParticipantState<M: Math> {
+    // Setup variables
+    id: u32,
+    feldman: Feldman,
+    other_participant_shares: HashMap<u32, ParticipantData<M>>,
+    ctx: Vec<u8>,
+}
 
+pub struct R1ParticipantState<M: Math> {
     // Setup variables
     id: u32,
     feldman: Feldman,
@@ -30,29 +36,42 @@ pub struct ParticipantState<M: Math> {
     ctx: Vec<u8>,
 
     // Round 1 variables
-    verifier: Option<FeldmanVerifier<<M::G as Group>::Scalar, M::G>>,
-    secret_shares: Option<Vec<ShamirShare>>,
+    verifier: FeldmanVerifier<<M::G as Group>::Scalar, M::G>,
+    secret_shares: Vec<ShamirShare>,
+}
+
+pub struct R2ParticipantState<M: Math> {
+    // Setup variables
+    id: u32,
+    feldman: Feldman,
+    other_participant_shares: HashMap<u32, ParticipantData<M>>,
+    ctx: Vec<u8>,
+
+    // Round 1 variables
+    verifier: FeldmanVerifier<<M::G as Group>::Scalar, M::G>,
+    secret_shares: Vec<ShamirShare>,
 
     // Round 2 variables
-    pub(crate) sk_share: Option<<M::G as Group>::Scalar>,
-    pub(crate) vk: Option<M::G>,
-    pub(crate) vk_share: Option<M::G>,
+    pub(crate) sk_share: <M::G as Group>::Scalar,
+    pub(crate) vk: M::G,
+    pub(crate) vk_share: M::G,
 }
 
 // TODO Decide how much of this we actually need.
 #[allow(unused)]
+#[derive(Clone)]
 struct ParticipantData<M: Math> {
     share: Option<ShamirShare>,
     verifiers: Option<FeldmanVerifier<<M::G as Group>::Scalar, M::G>>,
 }
 
-impl<M: Math> ParticipantState<M> {
+impl<M: Math> InitParticipantState<M> {
     pub fn new(
         id: u32,
         thresh: u32,
         ctx: Vec<u8>,
         other_participants: Vec<u32>,
-    ) -> Result<ParticipantState<M>, Error> {
+    ) -> Result<InitParticipantState<M>, Error> {
         if other_participants.is_empty() {
             return Err(Error::NoOtherParticipants);
         }
@@ -74,17 +93,11 @@ impl<M: Math> ParticipantState<M> {
             other_participant_shares.insert(opid, pd);
         }
 
-        Ok(ParticipantState {
-            round: 1,
+        Ok(InitParticipantState {
             id,
             feldman,
             other_participant_shares,
             ctx,
-            sk_share: None,
-            vk: None,
-            vk_share: None,
-            verifier: None,
-            secret_shares: None,
         })
     }
 }
@@ -104,9 +117,6 @@ pub type Round1Send = HashMap<u32, ShamirShare>;
 
 #[derive(Debug, Error)]
 pub enum Round1Error {
-    #[error("wrong round {0}")]
-    WrongRound(u32),
-
     #[error("feldman: {0:?}")]
     Feldman(vsss_rs::Error),
 
@@ -115,14 +125,10 @@ pub enum Round1Error {
 }
 
 pub fn round_1<M: Math, R: RngCore + CryptoRng>(
-    participant: &mut ParticipantState<M>,
+    participant: &InitParticipantState<M>,
     secret: <M::G as Group>::Scalar,
     rng: &mut R,
-) -> Result<(Round1Bcast<M>, Round1Send), Round1Error> {
-    if participant.round != 1 {
-        return Err(Round1Error::WrongRound(participant.round));
-    }
-
+) -> Result<(R1ParticipantState<M>, Round1Bcast<M>, Round1Send), Round1Error> {
     // TODO should we check the number of participants?
 
     // There was some stuff here but due to Rust we don't need it.
@@ -193,13 +199,16 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
     }
 
     // Save the things generated in step 1.
-    participant.verifier = Some(verifier);
-    participant.secret_shares = Some(shares);
+    let r1ps = R1ParticipantState {
+        id: participant.id,
+        feldman: participant.feldman,
+        other_participant_shares: participant.other_participant_shares.clone(),
+        ctx: participant.ctx.clone(),
+        verifier,
+        secret_shares: shares,
+    };
 
-    // Update round counter.
-    participant.round = 2;
-
-    Ok((r1bc, p2p_send))
+    Ok((r1ps, r1bc, p2p_send))
 }
 
 pub struct Round2Bcast<M: Math> {
@@ -229,10 +238,10 @@ pub enum Round2Error {
 }
 
 pub fn round_2<M: Math>(
-    participant: &mut ParticipantState<M>,
+    participant: &R1ParticipantState<M>,
     bcast: &HashMap<u32, Round1Bcast<M>>,
     p2psend: &HashMap<u32, ShamirShare>,
-) -> Result<Round2Bcast<M>, Round2Error> {
+) -> Result<(R2ParticipantState<M>, Round2Bcast<M>), Round2Error> {
     // We should validate Wi and Ci values in Round1Bcats
     for (_id, bc) in bcast.iter() {
         if bc.ci.is_zero() {
@@ -307,13 +316,12 @@ pub fn round_2<M: Math>(
     }
 
     // FIXME convert to soft error?
-    let sk_bytes =
-        &participant.secret_shares.as_ref().unwrap()[participant.id as usize - 1].value();
+    let sk_bytes = &participant.secret_shares[participant.id as usize - 1].value();
     let sk_repr = M::scalar_repr_from_bytes(sk_bytes).expect("shamir share parse as scalar failed");
     let mut sk =
         <M::G as Group>::Scalar::from_repr(sk_repr).expect("shamir share parse as scalar failed");
 
-    let mut vk: M::G = participant.verifier.as_ref().unwrap().commitments[0];
+    let mut vk: M::G = participant.verifier.commitments[0];
 
     // Step 6 - Compute signing key share ski = \sum_{j=1}^n xji
     for id in bcast.keys() {
@@ -337,18 +345,22 @@ pub fn round_2<M: Math>(
         vk += bc.verifiers.commitments[0];
     }
 
-    // Store signing key share.
-    participant.sk_share = Some(sk);
-
     // Step 7 - Compute verification key share vki = ski*G and store.
     let vk_share = M::G::generator() * sk;
-    participant.vk_share = Some(vk_share);
 
-    // Store verification key.
-    participant.vk = Some(vk);
+    let r2ps = R2ParticipantState {
+        id: participant.id,
+        feldman: participant.feldman,
+        other_participant_shares: participant.other_participant_shares.clone(),
+        ctx: participant.ctx.clone(),
+        verifier: participant.verifier.clone(),
+        secret_shares: participant.secret_shares.clone(),
+        sk_share: sk,
+        vk,
+        vk_share,
+    };
 
-    // Update round number.
-    participant.round = 3;
+    let r2bc = Round2Bcast { vk, vk_share };
 
-    Ok(Round2Bcast { vk, vk_share })
+    Ok((r2ps, r2bc))
 }

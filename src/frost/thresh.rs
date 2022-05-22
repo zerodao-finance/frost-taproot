@@ -29,10 +29,11 @@ pub enum Error {
 
 /// In the Go code this is just a hash-to-field of the serialized inputs, so we
 /// could make this totally general and implement it for all `Math`s, it seems.
-pub trait ChallengeDeriver<M: Math> {
+pub trait ChallengeDeriver<M: Math>: Clone {
     fn derive_challenge(&self, msg: &[u8], pk: M::G, r: M::G) -> <M::G as Group>::Scalar;
 }
 
+#[derive(Clone)]
 pub struct UniversalChderiv;
 
 impl<M: Math> ChallengeDeriver<M> for UniversalChderiv {
@@ -44,23 +45,31 @@ impl<M: Math> ChallengeDeriver<M> for UniversalChderiv {
     }
 }
 
+#[derive(Clone)]
 pub struct SignerState<M: Math, C: ChallengeDeriver<M>> {
     round: u32,
 
     // Setup variables
     id: u32,
-
-    // Other variables (for unimplemented rounds)
     thresh: u32,
     sk_share: <M::G as Group>::Scalar,
     vk_share: M::G,
     vk: M::G,
     lcoeffs: HashMap<u32, <M::G as Group>::Scalar>,
     cosigners: Vec<u32>,
-    state: InnerState<M>,
+    state: Inner<M>,
     challenge_deriver: C,
 }
 
+#[derive(Clone)]
+pub enum Inner<M: Math> {
+    Init,
+    R1(R1InnerState<M>),
+    R2(R2InnerState<M>),
+    Final,
+}
+
+#[derive(Clone)]
 pub struct InnerState<M: Math> {
     // Round 1 variables
     cap_d: Option<M::G>,
@@ -74,6 +83,35 @@ pub struct InnerState<M: Math> {
     c: Option<<M::G as Group>::Scalar>,
     cap_rs: Option<HashMap<u32, M::G>>,
     sum_r: Option<M::G>,
+}
+
+#[derive(Clone)]
+pub struct R1InnerState<M: Math> {
+    cap_d: M::G,
+    cap_e: M::G,
+    small_d: <M::G as Group>::Scalar,
+    small_e: <M::G as Group>::Scalar,
+}
+
+#[derive(Clone)]
+pub struct R2InnerState<M: Math> {
+    // Copied from round 1.
+    // No small_d or small_e since they're one-time use.
+    cap_d: M::G,
+    cap_e: M::G,
+
+    // Round 2.
+    commitments: HashMap<u32, Round1Bcast<M>>,
+    msg: Vec<u8>,
+    c: <M::G as Group>::Scalar,
+    cap_rs: HashMap<u32, M::G>,
+    sum_r: M::G,
+}
+
+impl<M: Math> Default for Inner<M> {
+    fn default() -> Self {
+        Self::Init
+    }
 }
 
 impl<M: Math> Default for InnerState<M> {
@@ -94,17 +132,13 @@ impl<M: Math> Default for InnerState<M> {
 
 impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
     pub fn new(
-        info: dkg::ParticipantState<M>,
+        info: &dkg::R2ParticipantState<M>,
         id: u32,
         thresh: u32,
         lcoeffs: HashMap<u32, <M::G as Group>::Scalar>,
         cosigners: Vec<u32>,
         cderiv: C,
     ) -> Result<SignerState<M, C>, Error> {
-        if info.round != 3 {
-            return Err(Error::InvalidSetupRound(info.round));
-        }
-
         if cosigners.is_empty() || lcoeffs.is_empty() {
             return Err(Error::ZeroCosigners);
         }
@@ -128,12 +162,12 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
             round: 1,
             id,
             thresh,
-            sk_share: info.sk_share.expect("setup missing sk_share"),
-            vk_share: info.vk_share.expect("setup missing vk_share"),
-            vk: info.vk.expect("setup missing vk"),
+            sk_share: info.sk_share,
+            vk_share: info.vk_share,
+            vk: info.vk,
             lcoeffs,
             cosigners,
-            state: InnerState::default(),
+            state: Inner::Init,
             challenge_deriver: cderiv,
         })
     }
@@ -199,9 +233,9 @@ pub enum Round1Error {
 }
 
 pub fn round_1<M: Math, C: ChallengeDeriver<M>>(
-    signer: &mut SignerState<M, C>,
+    signer: &SignerState<M, C>,
     mut rng: &mut impl Rng,
-) -> Result<Round1Bcast<M>, Round1Error> {
+) -> Result<(SignerState<M, C>, Round1Bcast<M>), Round1Error> {
     if signer.round != 1 {
         return Err(Round1Error::WrongRound(signer.round));
     }
@@ -214,19 +248,26 @@ pub fn round_1<M: Math, C: ChallengeDeriver<M>>(
     let big_di = <M::G as Group>::generator() * di;
     let big_ei = <M::G as Group>::generator() * ei;
 
-    // Update round number
-    signer.round = 1;
-
     // Store di, ei, Di, Ei locally and broadcast Di, Ei
-    signer.state.cap_d = Some(big_di);
-    signer.state.cap_e = Some(big_ei);
-    signer.state.small_d = Some(di);
-    signer.state.small_e = Some(ei);
+    let r1is = R1InnerState {
+        cap_d: big_di,
+        cap_e: big_ei,
+        small_d: di,
+        small_e: ei,
+    };
 
-    Ok(Round1Bcast {
+    let mut nsigner = signer.clone();
+    nsigner.state = Inner::R1(r1is);
+
+    // Update round number
+    nsigner.round = 2;
+
+    let r1bc = Round1Bcast {
         di: big_di,
         ei: big_ei,
-    })
+    };
+
+    Ok((nsigner, r1bc))
 }
 
 #[derive(Debug, Error)]
@@ -245,11 +286,11 @@ pub enum Round2Error {
 }
 
 pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
-    signer: &mut SignerState<M, C>,
+    signer: &SignerState<M, C>,
     msg: &[u8],
     round2_input: &HashMap<u32, Round1Bcast<M>>,
-) -> Result<Round2Bcast<M>, Round2Error> {
-    if signer.round != 1 {
+) -> Result<(SignerState<M, C>, Round2Bcast<M>), Round2Error> {
+    if signer.round != 2 {
         return Err(Round2Error::WrongRound(signer.round));
     }
 
@@ -269,13 +310,19 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
         ));
     }
 
+    let mut nsigner = signer.clone();
+    let r1is = match &signer.state {
+        Inner::R1(r1is) => r1is,
+        _ => panic!("round and inner state inconsistent!"),
+    };
+
     // Skipped: Step 2 - Check Dj, Ej on the curve and Store round2Input
 
     // Store Dj, Ej for further usage.
     // deferred: signer.state.commitments = Some(round2_input);
 
     // Step 3-6
-    let mut r = <M::G as Group>::identity();
+    let mut sum_r = <M::G as Group>::identity();
     let mut ri = <<M::G as Group>::Scalar as Field>::zero();
     let mut rs = HashMap::<u32, M::G>::new();
     for (id, data) in round2_input {
@@ -294,48 +341,52 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
         rs.insert(*id, rj);
 
         // Step 6 - R = R+Rj
-        r += rj;
+        sum_r += rj;
     }
 
     // Step 7 - c = H(m, R)
     let c = signer
         .challenge_deriver
-        .derive_challenge(&msg, signer.vk, r);
-
-    // Step 8 - Record c, R, Rjs
-    signer.state.c = Some(c);
-    signer.state.cap_rs = Some(rs);
-    signer.state.sum_r = Some(r);
+        .derive_challenge(&msg, signer.vk, sum_r);
 
     // Step 9 - zi = di + ei*ri + Li*ski*c
     let li = signer.lcoeffs[&signer.id];
     let liski = li * signer.sk_share;
-    let liskic = liski * signer.state.c.unwrap();
+    let liskic = liski * c;
 
     // Normalize the point.  This math is a little screwy so make sure it's correct.
-    let sumr_unwrap = signer.state.sum_r.unwrap();
-    if M::group_point_is_negative(sumr_unwrap) {
+    if M::group_point_is_negative(sum_r) {
         // Figuring out if it's negative or not is hard.  But once we know, flipping it is easy.
-        signer.state.sum_r = Some(-sumr_unwrap);
+        sum_r = -sum_r;
     }
 
-    let eiri = signer.state.small_e.unwrap() * ri;
+    let eiri = r1is.small_e * ri;
 
     // Compute zi = di+ei*ri+Li*ski*c
-    let zi = liskic + eiri + signer.state.small_d.unwrap();
+    let zi = liskic + eiri + r1is.small_d;
 
     // Update round number and store message
-    signer.round = 2;
-    signer.state.msg = Some(msg.to_vec());
+    nsigner.round = 3;
 
-    // Clear small_d and small_e since they're one-time use.
-    signer.state.small_d = None;
-    signer.state.small_e = None;
+    // Step 8 - Record c, R, Rjs
+    let r2is = R2InnerState {
+        cap_d: r1is.cap_d,
+        cap_e: r1is.cap_d,
+        commitments: round2_input.clone(),
+        msg: msg.to_vec(),
+        c,
+        cap_rs: rs,
+        sum_r,
+    };
 
-    Ok(Round2Bcast {
+    nsigner.state = Inner::R2(r2is);
+
+    let r2bc = Round2Bcast {
         zi,
         vki: signer.vk_share,
-    })
+    };
+
+    Ok((nsigner, r2bc))
 }
 
 fn concat_hash_array<M: Math>(
@@ -380,14 +431,20 @@ pub enum Round3Error {
 }
 
 pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
-    signer: &mut SignerState<M, C>,
+    signer: &SignerState<M, C>,
     round3_input: &HashMap<u32, Round2Bcast<M>>,
-) -> Result<Round3Bcast<M>, Round3Error> {
-    if signer.round != 2 {
+) -> Result<(SignerState<M, C>, Round3Bcast<M>), Round3Error> {
+    if signer.round != 3 {
         return Err(Round3Error::WrongRound(signer.round));
     }
 
     // A bunch of checks we can skip here.
+
+    let mut nsigner = signer.clone();
+    let r2is = match &signer.state {
+        Inner::R2(r2is) => r2is,
+        _ => panic!("round and inner state inconsistent!"),
+    };
 
     let r3iu32 = round3_input.len() as u32;
     if r3iu32 != signer.thresh {
@@ -397,18 +454,14 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
         ));
     }
 
-    let signer_c = signer.state.c.expect("signer c value unset");
-    let signer_rs = signer
-        .state
-        .cap_rs
-        .as_ref()
-        .expect("signer Rs values unset");
-    let signer_msg = signer.state.msg.as_ref().expect("signer message unset");
+    let signer_c = r2is.c;
+    let signer_rs = r2is.cap_rs.clone();
+    let signer_msg = r2is.msg.as_slice();
 
     // Step 1-3
     // Step 1: For j in [1...t]
     let mut z = <<M::G as Group>::Scalar as Field>::zero();
-    let negate = M::group_point_is_negative(signer.state.sum_r.unwrap()); // TODO verify correctness
+    let negate = M::group_point_is_negative(r2is.sum_r); // TODO verify correctness
     for (id, data) in round3_input {
         let zj = data.zi;
         let vkj = data.vki;
@@ -462,14 +515,17 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     }
 
     // Update round number
-    signer.round = 3;
+    nsigner.round = 4;
+    nsigner.state = Inner::Final;
 
-    Ok(Round3Bcast {
-        r: signer.state.sum_r.expect("signer sum_r unset"),
+    let r3bc = Round3Bcast {
+        r: r2is.sum_r,
         z,
         c: signer_c,
-        msg: signer_msg.clone(),
-    })
+        msg: signer_msg.to_vec(),
+    };
+
+    Ok((nsigner, r3bc))
 }
 
 pub fn verify<M: Math, C: ChallengeDeriver<M>>(
