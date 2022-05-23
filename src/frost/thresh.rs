@@ -1,4 +1,5 @@
 use std::collections::*;
+use std::fmt;
 
 use rand::Rng;
 use thiserror::Error;
@@ -47,8 +48,6 @@ impl<M: Math> ChallengeDeriver<M> for UniversalChderiv {
 
 #[derive(Clone)]
 pub struct SignerState<M: Math, C: ChallengeDeriver<M>> {
-    round: u32,
-
     // Setup variables
     id: u32,
     thresh: u32,
@@ -69,20 +68,15 @@ pub enum Inner<M: Math> {
     Final,
 }
 
-#[derive(Clone)]
-pub struct InnerState<M: Math> {
-    // Round 1 variables
-    cap_d: Option<M::G>,
-    cap_e: Option<M::G>,
-    small_d: Option<<M::G as Group>::Scalar>,
-    small_e: Option<<M::G as Group>::Scalar>,
-
-    // Round 2 variables
-    pub commitments: Option<HashMap<u32, Round1Bcast<M>>>,
-    msg: Option<Vec<u8>>,
-    c: Option<<M::G as Group>::Scalar>,
-    cap_rs: Option<HashMap<u32, M::G>>,
-    sum_r: Option<M::G>,
+impl<M: Math> Inner<M> {
+    fn legacy_round(&self) -> u32 {
+        match self {
+            Self::Init => 1,
+            Self::R1(_) => 2,
+            Self::R2(_) => 3,
+            Self::Final => 4,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -111,22 +105,6 @@ pub struct R2InnerState<M: Math> {
 impl<M: Math> Default for Inner<M> {
     fn default() -> Self {
         Self::Init
-    }
-}
-
-impl<M: Math> Default for InnerState<M> {
-    fn default() -> Self {
-        InnerState {
-            cap_d: None,
-            cap_e: None,
-            small_d: None,
-            small_e: None,
-            commitments: None,
-            msg: None,
-            c: None,
-            cap_rs: None,
-            sum_r: None,
-        }
     }
 }
 
@@ -159,7 +137,6 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
         }
 
         Ok(SignerState {
-            round: 1,
             id,
             thresh,
             sk_share: info.sk_share,
@@ -207,8 +184,6 @@ pub struct Signature<M: Math> {
     c: <M::G as Group>::Scalar,
 }
 
-use std::fmt;
-
 impl<M: Math> fmt::Debug for Signature<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let z_hex = hex::encode(M::scalar_repr_to_bytes(self.z.to_repr()));
@@ -236,8 +211,8 @@ pub fn round_1<M: Math, C: ChallengeDeriver<M>>(
     signer: &SignerState<M, C>,
     mut rng: &mut impl Rng,
 ) -> Result<(SignerState<M, C>, Round1Bcast<M>), Round1Error> {
-    if signer.round != 1 {
-        return Err(Round1Error::WrongRound(signer.round));
+    if signer.state.legacy_round() != 1 {
+        return Err(Round1Error::WrongRound(signer.state.legacy_round()));
     }
 
     // Step 1 - Sample di, ei
@@ -249,18 +224,13 @@ pub fn round_1<M: Math, C: ChallengeDeriver<M>>(
     let big_ei = <M::G as Group>::generator() * ei;
 
     // Store di, ei, Di, Ei locally and broadcast Di, Ei
-    let r1is = R1InnerState {
+    let mut nsigner = signer.clone();
+    nsigner.state = Inner::R1(R1InnerState {
         cap_d: big_di,
         cap_e: big_ei,
         small_d: di,
         small_e: ei,
-    };
-
-    let mut nsigner = signer.clone();
-    nsigner.state = Inner::R1(r1is);
-
-    // Update round number
-    nsigner.round = 2;
+    });
 
     let r1bc = Round1Bcast {
         di: big_di,
@@ -290,9 +260,10 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
     msg: &[u8],
     round2_input: &HashMap<u32, Round1Bcast<M>>,
 ) -> Result<(SignerState<M, C>, Round2Bcast<M>), Round2Error> {
-    if signer.round != 2 {
-        return Err(Round2Error::WrongRound(signer.round));
-    }
+    let r1is = match &signer.state {
+        Inner::R1(r1is) => r1is,
+        _ => return Err(Round2Error::WrongRound(signer.state.legacy_round())),
+    };
 
     // Some checks here we can skip.
     // * Make sure those private d is not empty and not zero
@@ -311,10 +282,6 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
     }
 
     let mut nsigner = signer.clone();
-    let r1is = match &signer.state {
-        Inner::R1(r1is) => r1is,
-        _ => panic!("round and inner state inconsistent!"),
-    };
 
     // Skipped: Step 2 - Check Dj, Ej on the curve and Store round2Input
 
@@ -365,11 +332,8 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
     // Compute zi = di+ei*ri+Li*ski*c
     let zi = liskic + eiri + r1is.small_d;
 
-    // Update round number and store message
-    nsigner.round = 3;
-
     // Step 8 - Record c, R, Rjs
-    let r2is = R2InnerState {
+    nsigner.state = Inner::R2(R2InnerState {
         cap_d: r1is.cap_d,
         cap_e: r1is.cap_d,
         commitments: round2_input.clone(),
@@ -377,9 +341,7 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
         c,
         cap_rs: rs,
         sum_r,
-    };
-
-    nsigner.state = Inner::R2(r2is);
+    });
 
     let r2bc = Round2Bcast {
         zi,
@@ -434,25 +396,15 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     signer: &SignerState<M, C>,
     round3_input: &HashMap<u32, Round2Bcast<M>>,
 ) -> Result<(SignerState<M, C>, Round3Bcast<M>), Round3Error> {
-    if signer.round != 3 {
-        return Err(Round3Error::WrongRound(signer.round));
-    }
+    let r2is = match &signer.state {
+        Inner::R2(r2is) => r2is,
+        _ => return Err(Round3Error::WrongRound(signer.state.legacy_round())),
+    };
+    let mut nsigner = signer.clone();
 
     // A bunch of checks we can skip here.
 
-    let mut nsigner = signer.clone();
-    let r2is = match &signer.state {
-        Inner::R2(r2is) => r2is,
-        _ => panic!("round and inner state inconsistent!"),
-    };
-
     let r3iu32 = round3_input.len() as u32;
-    if r3iu32 != signer.thresh {
-        return Err(Round3Error::InputMismatchThresh(
-            round3_input.len() as u32,
-            signer.thresh,
-        ));
-    }
 
     let signer_c = r2is.c;
     let signer_rs = r2is.cap_rs.clone();
@@ -515,7 +467,6 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     }
 
     // Update round number
-    nsigner.round = 4;
     nsigner.state = Inner::Final;
 
     let r3bc = Round3Bcast {
