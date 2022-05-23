@@ -16,6 +16,9 @@ pub enum Error {
     #[error("no other participants specified")]
     NoOtherParticipants,
 
+    #[error("participant id cannot be zero")]
+    ZeroParticipantId,
+
     #[error("unimplemented")]
     Unimplemented,
 }
@@ -57,6 +60,20 @@ pub struct R2ParticipantState<M: Math> {
     pub(crate) vk_share: M::G,
 }
 
+impl<M: Math> R2ParticipantState<M> {
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub fn group_size(&self) -> u32 {
+        self.feldman.n as u32
+    }
+
+    pub fn group_thresh(&self) -> u32 {
+        self.feldman.t as u32
+    }
+}
+
 // TODO Decide how much of this we actually need.
 #[allow(unused)]
 #[derive(Clone)]
@@ -74,6 +91,10 @@ impl<M: Math> InitParticipantState<M> {
     ) -> Result<InitParticipantState<M>, Error> {
         if other_participants.is_empty() {
             return Err(Error::NoOtherParticipants);
+        }
+
+        if id == 0 {
+            return Err(Error::ZeroParticipantId);
         }
 
         let limit = other_participants.len() + 1;

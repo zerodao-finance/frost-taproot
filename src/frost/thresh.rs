@@ -12,8 +12,11 @@ pub enum Error {
     #[error("zero cosigners")]
     ZeroCosigners,
 
-    #[error("threshold out of bounds")]
-    ThreshOob,
+    #[error("participant id cannot be zero")]
+    ZeroParticipantId,
+
+    #[error("threshold {1} greater than supplied {0} signers")]
+    InsufficientCosigners(u32, u32),
 
     #[error("coefficients list mismatch length with cosigners list ({0} != {1})")]
     CoeffsCosignersMismatchCount(usize, usize),
@@ -109,22 +112,37 @@ impl<M: Math> Default for Inner<M> {
 }
 
 impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
+    /// Takes a final participant state and initializes a new signer with it.
+    /// Some information may be redundant.
     pub fn new(
         info: &dkg::R2ParticipantState<M>,
-        id: u32,
-        thresh: u32,
-        lcoeffs: HashMap<u32, <M::G as Group>::Scalar>,
         cosigners: Vec<u32>,
         cderiv: C,
     ) -> Result<SignerState<M, C>, Error> {
-        if cosigners.is_empty() || lcoeffs.is_empty() {
+        if cosigners.is_empty() {
             return Err(Error::ZeroCosigners);
         }
 
-        if thresh as usize > cosigners.len() {
-            return Err(Error::ThreshOob);
+        let id = info.id();
+        let thresh = info.group_thresh();
+
+        if id == 0 {
+            return Err(Error::ZeroParticipantId);
         }
 
+        if thresh as usize > cosigners.len() {
+            return Err(Error::InsufficientCosigners(thresh, cosigners.len() as u32));
+        }
+
+        // Generate the lagrange coefficients.
+        // TODO Should we make it so these can be supplied externally?
+        let lcoeffs = gen_lagrange_coefficients::<<M::G as Group>::Scalar>(
+            cosigners.len() as u32,
+            thresh,
+            &cosigners,
+        );
+
+        // This check should never fail now, should we remove it?
         if lcoeffs.len() != cosigners.len() {
             return Err(Error::CoeffsCosignersMismatchCount(
                 lcoeffs.len(),
@@ -405,6 +423,9 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     // A bunch of checks we can skip here.
 
     let r3iu32 = round3_input.len() as u32;
+    if r3iu32 != signer.thresh {
+        return Err(Round3Error::InputMismatchThresh(r3iu32, signer.thresh));
+    }
 
     let signer_c = r2is.c;
     let signer_rs = r2is.cap_rs.clone();

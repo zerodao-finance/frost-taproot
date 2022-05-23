@@ -83,12 +83,9 @@ fn do_thresh_sign_2of2<M: Math>() {
     let (p1, _, p2, _) = do_dkg_2of2::<M>();
     let p1vk = p1.vk;
 
-    let lcoeffs1 = thresh::gen_lagrange_coefficients(2, 2, &[1, 2]);
-    let lcoeffs2 = lcoeffs1.clone();
-
-    let is1 = thresh::SignerState::new(&p1, 1, 2, lcoeffs1, vec![1, 2], thresh::UniversalChderiv)
+    let is1 = thresh::SignerState::new(&p1, vec![1, 2], thresh::UniversalChderiv)
         .expect("test: init signer 1");
-    let is2 = thresh::SignerState::new(&p2, 2, 2, lcoeffs2, vec![1, 2], thresh::UniversalChderiv)
+    let is2 = thresh::SignerState::new(&p2, vec![1, 2], thresh::UniversalChderiv)
         .expect("test: init signer 2");
 
     let mut rng = rand::thread_rng();
