@@ -24,12 +24,6 @@ pub trait Math: Clone {
 }
 
 // TODO Verify this is a valid way to do it.
-pub fn hash_to_curve<G: Group>(buf: &[u8]) -> G {
-    let mut rng = hash_to_chacha20(buf);
-    G::random(&mut rng)
-}
-
-// TODO Verify this is a valid way to do it.
 pub fn hash_to_field<F: PrimeField>(buf: &[u8]) -> F {
     let mut rng = hash_to_chacha20(buf);
     F::random(&mut rng)

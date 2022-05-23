@@ -55,9 +55,9 @@ pub struct R2ParticipantState<M: Math> {
     secret_shares: Vec<ShamirShare>,
 
     // Round 2 variables
-    pub(crate) sk_share: <M::G as Group>::Scalar,
-    pub(crate) vk: M::G,
-    pub(crate) vk_share: M::G,
+    sk_share: <M::G as Group>::Scalar,
+    vk: M::G,
+    vk_share: M::G,
 }
 
 impl<M: Math> R2ParticipantState<M> {
@@ -71,6 +71,20 @@ impl<M: Math> R2ParticipantState<M> {
 
     pub fn group_thresh(&self) -> u32 {
         self.feldman.t as u32
+    }
+
+    pub fn sk_share(&self) -> <M::G as Group>::Scalar {
+        self.sk_share
+    }
+
+    /// The "verification key", which is just a fancy word for a public key
+    /// since we're secret sharing it.
+    pub fn vk(&self) -> M::G {
+        self.vk
+    }
+
+    pub fn vk_share(&self) -> M::G {
+        self.vk_share
     }
 }
 

@@ -157,9 +157,9 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
         Ok(SignerState {
             id,
             thresh,
-            sk_share: info.sk_share,
-            vk_share: info.vk_share,
-            vk: info.vk,
+            sk_share: info.sk_share(),
+            vk_share: info.vk_share(),
+            vk: info.vk(),
             lcoeffs,
             cosigners,
             state: Inner::Init,
