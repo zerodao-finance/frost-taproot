@@ -1,4 +1,4 @@
-use digest::Digest;
+use digest::{consts::U32, generic_array::GenericArray, Digest};
 use elliptic_curve as ec;
 pub use ff::{Field, PrimeField};
 use rand::SeedableRng;
@@ -9,7 +9,7 @@ pub use ec::ScalarArithmetic;
 
 pub trait Math: Clone {
     type F: PrimeField;
-    type G: Curve + GroupEncoding + Default + ScalarMul<Self::F>;
+    type G: Group + GroupEncoding + Default + ScalarMul<Self::F>;
 
     fn scalar_repr_from_bytes(
         buf: &[u8],
@@ -127,5 +127,38 @@ impl Math for Secp256k1Math {
 
         // "high" means zero or positive here, so if it's false then it must be negative.
         y_fb.is_high().unwrap_u8() == 0
+    }
+}
+
+use curve25519_dalek as onenine;
+
+#[derive(Clone, Debug)]
+pub struct Curve25519Math;
+
+impl Math for Curve25519Math {
+    type F = onenine::scalar::Scalar;
+
+    type G = onenine::ristretto::RistrettoPoint;
+
+    fn scalar_repr_from_bytes(
+        buf: &[u8],
+    ) -> Option<<<Self::G as Group>::Scalar as PrimeField>::Repr> {
+        GenericArray::<u8, U32>::from_exact_iter(buf.iter().copied())
+    }
+
+    fn scalar_repr_to_bytes(r: <<Self::G as Group>::Scalar as PrimeField>::Repr) -> Vec<u8> {
+        Vec::from(r.as_slice())
+    }
+
+    fn group_repr_from_bytes(buf: &[u8]) -> Option<<Self::G as GroupEncoding>::Repr> {
+        GenericArray::<u8, U32>::from_exact_iter(buf.iter().copied())
+    }
+
+    fn group_repr_to_bytes(r: <Self::G as GroupEncoding>::Repr) -> Vec<u8> {
+        Vec::from(r.as_slice())
+    }
+
+    fn group_point_is_negative(_e: Self::G) -> bool {
+        false
     }
 }
