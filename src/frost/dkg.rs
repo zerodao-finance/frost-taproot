@@ -265,6 +265,12 @@ pub enum Round2Error {
     #[error("hash check failed with participant {0}")]
     HashCheckFailed(u32),
 
+    #[error("shamir share parse as scalar failed")]
+    ShamirShareParseFail,
+
+    #[error("p2p send parse fail from participant {0}")]
+    P2PSendParseFail(u32),
+
     #[error("p2psend table missing participent {0}")]
     PeerSendMissing(u32),
 
@@ -279,13 +285,13 @@ pub fn round_2<M: Math>(
 ) -> Result<(R2ParticipantState<M>, Round2Bcast<M>), Round2Error> {
     // We should validate Wi and Ci values in Round1Bcats
     for (_id, bc) in bcast.iter() {
-        if bc.ci.is_zero() {
+        if bc.ci.is_zero().into() {
             return Err(Round2Error::CommitmentZero);
         }
 
         for com in &bc.verifiers.commitments {
             // TODO Add reporting for the indexes?
-            if com.is_identity().unwrap_u8() == 1 {
+            if com.is_identity().into() {
                 return Err(Round2Error::CommitmentIdentity);
             }
         }
@@ -350,11 +356,15 @@ pub fn round_2<M: Math>(
         }
     }
 
-    // FIXME convert to soft error?
+    // Take the bytes from the share and work backwards to get the scalar.
     let sk_bytes = &participant.secret_shares[participant.id as usize - 1].value();
-    let sk_repr = M::scalar_repr_from_bytes(sk_bytes).expect("shamir share parse as scalar failed");
-    let mut sk =
-        <M::G as Group>::Scalar::from_repr(sk_repr).expect("shamir share parse as scalar failed");
+    let sk_repr = M::scalar_repr_from_bytes(sk_bytes).ok_or(Round2Error::ShamirShareParseFail)?;
+    let sk_opt = <M::G as Group>::Scalar::from_repr(sk_repr);
+    let mut sk = if sk_opt.is_some().into() {
+        sk_opt.unwrap()
+    } else {
+        return Err(Round2Error::ShamirShareParseFail);
+    };
 
     let mut vk: M::G = participant.verifier.commitments[0];
 
@@ -364,10 +374,15 @@ pub fn round_2<M: Math>(
             continue;
         }
 
-        // FIXME convert to soft error?
-        let t2_repr =
-            M::scalar_repr_from_bytes(&p2psend[id].value()).expect("p2psend parse failed");
-        let t2 = <M::G as Group>::Scalar::from_repr(t2_repr).expect("p2psend parse failed");
+        // Like above, work backwards from the share that was sent to get the scalar.
+        let t2_repr = M::scalar_repr_from_bytes(&p2psend[id].value())
+            .ok_or(Round2Error::P2PSendParseFail(*id))?;
+        let t2_opt = <M::G as Group>::Scalar::from_repr(t2_repr);
+        let t2 = if t2_opt.is_some().into() {
+            t2_opt.unwrap()
+        } else {
+            return Err(Round2Error::P2PSendParseFail(*id));
+        };
         sk += t2;
     }
 

@@ -78,10 +78,12 @@ fn test_dkg_2of2_works_secp256k1() {
     do_dkg_2of2::<math::Secp256k1Math>();
 }
 
+/*
 #[test]
 fn test_dkg_2of2_works_curve25519() {
     do_dkg_2of2::<math::Curve25519Math>();
 }
+ */
 
 fn do_thresh_sign_2of2<M: Math>() {
     let (p1, _, p2, _) = do_dkg_2of2::<M>();
@@ -132,7 +134,9 @@ fn test_thresh_sign_2of2_works_secp256k1() {
     do_thresh_sign_2of2::<math::Secp256k1Math>();
 }
 
+/*
 #[test]
 fn test_thresh_sign_2of2_works_curve25519() {
     do_thresh_sign_2of2::<math::Curve25519Math>();
 }
+*/

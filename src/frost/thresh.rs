@@ -566,7 +566,7 @@ pub fn gen_lagrange_coefficients<F: Field>(
             den *= xj_f - xi_f;
         }
 
-        if den.is_zero() {
+        if den.is_zero().into() {
             panic!(
                 "divide by zero! limit={}, thresh={}, idents={:?}",
                 limit, thresh, idents,
