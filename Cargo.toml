@@ -1,31 +1,4 @@
-[package]
-name = "krustology"
-version = "0.2.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-digest = "0.10"
-ff = { version = "0.12", features = ["bits"] }
-group = "0.12"
-elliptic-curve = { version = "0.12", features = ["serde", "sec1", "arithmetic"] }
-k256 = { version = "0.12.0-pre.0", features = ["arithmetic"] }
-rand = { version = "0.8", features = ["getrandom"] }
-rand_chacha = "0.3"
-sha2 = "0.10"
-thiserror = "1"
-hex = "*"
-vsss-rs = { version = "2.1", default-features = false, features = ["std"] }
-
-#[dependencies.curve25519-dalek]
-#git = "https://github.com/xpool-network/curve25519-dalek.git"
-#branch = "krusty"
-#default-features = true
-#features = ["elliptic-curve"]
-
-#[dependencies.vsss-rs]
-#git = "https://github.com/mikelodder7/vsss-rs.git"
-#rev = "5d44175ddf8ed0437f0573759399c77bd56d2d79"
-#default-features = false
-#features = ["std"]
+[workspace]
+members = [
+	"core",
+]
