@@ -10,7 +10,7 @@ digest = "0.10"
 ff = { version = "0.12", features = ["bits"] }
 group = "0.12"
 elliptic-curve = { version = "0.12", features = ["serde", "sec1", "arithmetic"] }
-k256 = { version = "0.12.0-pre.0", features = ["arithmetic"] }
+k256 = { version = "0.12.0-pre.0", features = ["arithmetic", "schnorr"] }
 rand = { version = "0.8", features = ["getrandom"] }
 rand_chacha = "0.3"
 sha2 = "0.10"

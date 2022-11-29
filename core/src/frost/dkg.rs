@@ -9,7 +9,7 @@ use vsss_rs::{Feldman, FeldmanVerifier};
 
 use ec::group::{Group, GroupEncoding};
 
-use super::math::*;
+use super::{hash, math::*, sig};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -65,10 +65,12 @@ impl<M: Math> R2ParticipantState<M> {
         self.id
     }
 
+    /// The number of parties the privkey is shared across.
     pub fn group_size(&self) -> u32 {
         self.feldman.n as u32
     }
 
+    /// The number of parties that need to come together to create a signature.
     pub fn group_thresh(&self) -> u32 {
         self.feldman.t as u32
     }
@@ -81,6 +83,11 @@ impl<M: Math> R2ParticipantState<M> {
     /// since we're secret sharing it.
     pub fn vk(&self) -> M::G {
         self.vk
+    }
+
+    /// Just like .vk(), but wraps it in the nicer container.
+    pub fn to_schnorr_pk(&self) -> sig::SchnorrPubkey<M> {
+        sig::SchnorrPubkey { y: self.vk }
     }
 
     pub fn vk_share(&self) -> M::G {
@@ -199,7 +206,7 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
     eprintln!("round1 {}   {}", participant.id, hex::encode(&buf));
 
     // Figure out the hash-to-field thing.
-    let ci = hash_to_field::<<M::G as Group>::Scalar>(&buf);
+    let ci = hash::hash_to_field::<<M::G as Group>::Scalar>(&buf);
 
     // Step 5 - Compute Wi = ki+a_{i,0}*c_i mod q. Note that a_{i,0} is the secret.
     //
@@ -249,6 +256,12 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
 pub struct Round2Bcast<M: Math> {
     pub vk: M::G,
     pub vk_share: M::G,
+}
+
+impl<M: Math> Round2Bcast<M> {
+    pub fn to_schnorr_pubkey(&self) -> sig::SchnorrPubkey<M> {
+        sig::SchnorrPubkey::from_group_elem(self.vk)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -337,7 +350,7 @@ pub fn round_2<M: Math>(
         eprintln!("round2 {} {} {}", participant.id, id, hex::encode(&buf));
 
         // Figure out the hash-to-field thing.
-        let cj = hash_to_field::<<M::G as Group>::Scalar>(&buf);
+        let cj = hash::hash_to_field::<<M::G as Group>::Scalar>(&buf);
 
         // Check equation.
         if cj != bc.ci {

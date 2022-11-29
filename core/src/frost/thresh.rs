@@ -4,8 +4,11 @@ use std::fmt;
 use rand::Rng;
 use thiserror::Error;
 
+use super::challenge::*;
 use super::dkg;
+use super::hash::*;
 use super::math::*;
+use super::sig::{SchnorrPubkey, Signature};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -29,24 +32,6 @@ pub enum Error {
 
     #[error("unimplemented")]
     Unimplemented,
-}
-
-/// In the Go code this is just a hash-to-field of the serialized inputs, so we
-/// could make this totally general and implement it for all `Math`s, it seems.
-pub trait ChallengeDeriver<M: Math>: Clone {
-    fn derive_challenge(&self, msg: &[u8], pk: M::G, r: M::G) -> <M::G as Group>::Scalar;
-}
-
-#[derive(Clone)]
-pub struct UniversalChderiv;
-
-impl<M: Math> ChallengeDeriver<M> for UniversalChderiv {
-    fn derive_challenge(&self, msg: &[u8], pk: M::G, r: M::G) -> <M::G as Group>::Scalar {
-        let mut buf = msg.to_vec();
-        buf.extend(M::group_repr_to_bytes(pk.to_bytes()));
-        buf.extend(M::group_repr_to_bytes(r.to_bytes()));
-        hash_to_field(&buf)
-    }
 }
 
 #[derive(Clone)]
@@ -193,26 +178,6 @@ impl<M: Math> Round3Bcast<M> {
             z: self.z,
             c: self.c,
         }
-    }
-}
-
-#[derive(Clone)]
-pub struct Signature<M: Math> {
-    z: <M::G as Group>::Scalar,
-    c: <M::G as Group>::Scalar,
-}
-
-impl<M: Math> fmt::Debug for Signature<M> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let z_hex = hex::encode(M::scalar_repr_to_bytes(self.z.to_repr()));
-        let c_hex = hex::encode(M::scalar_repr_to_bytes(self.c.to_repr()));
-        f.write_fmt(format_args!("{}.{}", z_hex, c_hex))
-    }
-}
-
-impl<M: Math> PartialEq for Signature<M> {
-    fn eq(&self, other: &Self) -> bool {
-        (self.z == other.z) && (self.c == other.c)
     }
 }
 
@@ -498,24 +463,6 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     };
 
     Ok((nsigner, r3bc))
-}
-
-pub fn verify<M: Math, C: ChallengeDeriver<M>>(
-    cderiv: &C,
-    vk: M::G,
-    msg: &[u8],
-    sig: &Signature<M>,
-) -> bool {
-    // R' = z*G - c*vk
-    let zg = <M::G as Group>::generator() * sig.z;
-    let cvk = vk * -sig.c; // additive not multiplicative!
-    let tmp_r = zg + cvk;
-
-    //c' = H(m, R')
-    let tmp_c = cderiv.derive_challenge(msg, vk, tmp_r);
-
-    // Check c == c'
-    tmp_c == sig.c
 }
 
 /// Basically just gets a version of a number in the scalar field since we can't

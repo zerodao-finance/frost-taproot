@@ -1,9 +1,10 @@
 use std::collections::*;
 
 use super::{
+    challenge::UniversalChderiv,
     dkg::{self, InitParticipantState},
     math::{self, Field, Group, GroupEncoding, Math, PrimeField},
-    thresh,
+    sig, thresh,
 };
 
 fn do_dkg_2of2<M: math::Math>() -> (
@@ -89,10 +90,10 @@ fn do_thresh_sign_2of2<M: Math>() {
     let (p1, _, p2, _) = do_dkg_2of2::<M>();
     let p1vk = p1.vk();
 
-    let is1 = thresh::SignerState::new(&p1, vec![1, 2], thresh::UniversalChderiv)
-        .expect("test: init signer 1");
-    let is2 = thresh::SignerState::new(&p2, vec![1, 2], thresh::UniversalChderiv)
-        .expect("test: init signer 2");
+    let is1 =
+        thresh::SignerState::new(&p1, vec![1, 2], UniversalChderiv).expect("test: init signer 1");
+    let is2 =
+        thresh::SignerState::new(&p2, vec![1, 2], UniversalChderiv).expect("test: init signer 2");
 
     let mut rng = rand::thread_rng();
 
@@ -121,12 +122,8 @@ fn do_thresh_sign_2of2<M: Math>() {
     assert_eq!(s1_sig, s2_sig);
 
     // Assert the signature is correct.
-    assert!(thresh::verify(
-        &thresh::UniversalChderiv,
-        p1vk,
-        &msg,
-        &s1_sig
-    ));
+    let p1pk = sig::SchnorrPubkey::from_group_elem(p1vk);
+    assert!(sig::verify(&UniversalChderiv, &p1pk, &msg, &s1_sig));
 }
 
 #[test]
