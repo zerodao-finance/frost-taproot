@@ -12,3 +12,4 @@ wasm-bindgen = "0.2"
 getrandom = { version = "*", features = ["js"] }
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.4"
+vsss-rs = { version = "2.1", default-features = false, features = ["std"] }

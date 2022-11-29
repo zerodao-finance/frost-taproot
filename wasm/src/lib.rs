@@ -1,25 +1,8 @@
 use std::collections::*;
 
-use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1DkgInitState {
-    // TODO
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1DkgR1State {
-    // TODO
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1DkgR2State {
-    // TODO
-}
+mod frost_secp256k1;
 
 /// Initializes a DKG session.
 #[wasm_bindgen]
@@ -28,22 +11,8 @@ pub fn frost_secp256k1_dkg_init(
     thresh: u32,
     ctx: Vec<u8>,
     other_participants: Vec<u32>,
-) -> FrostSecp256k1DkgInitState {
+) -> frost_secp256k1::DkgInitState {
     unimplemented!()
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1R1Output {
-    state: FrostSecp256k1DkgR1State,
-    bcast: FrostSecp256k1R1Bcast,
-    sends: HashMap<u32, Vec<u8>>,
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1R1Bcast {
-    // TODO
 }
 
 /// DKG Round 1.
@@ -51,74 +20,40 @@ pub struct FrostSecp256k1R1Bcast {
 /// Secret is a byte blob, like `Vec<u8>`.
 #[wasm_bindgen]
 pub fn frost_secp256k1_dkg_r1(
-    state: FrostSecp256k1DkgInitState,
+    state: frost_secp256k1::DkgInitState,
     secret: JsValue,
     rng_seed: u64,
-) -> Result<FrostSecp256k1R1Output, String> {
+) -> Result<frost_secp256k1::DkgR1Output, String> {
     unimplemented!()
 }
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1R2Bcast {
-    // TODO
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1R2Output {
-    state: FrostSecp256k1DkgR2State,
-    bcast: FrostSecp256k1R2Bcast,
-}
-
-/// DKG Round 2.
-///
-/// bcast here is `HashMap<u32, FrostSecp256k1R1Bcast>`
+/// bcast here is `HashMap<u32, frost_secp256k1::R1Bcast>`
 /// p2p_send here are the serialized shamir shares, like `HashMap<u32, Vec<u8>>`.
 #[wasm_bindgen]
 pub fn frost_secp256k1_dkg_r2(
-    state: FrostSecp256k1DkgR1State,
+    state: frost_secp256k1::DkgR1State,
     bcast: JsValue,
     p2p_send: JsValue,
-) -> Result<FrostSecp256k1R2Output, String> {
+) -> Result<frost_secp256k1::DkgR2Output, String> {
     unimplemented!()
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct SignerState {
-    // TODO
 }
 
 /// Signing session init.  Each signing session must create a new signer state.
 #[wasm_bindgen]
 pub fn frost_secp256k1_sign_init(
-    info: FrostSecp256k1DkgR2State,
+    info: frost_secp256k1::DkgR2State,
     cosigners: Vec<u32>,
-) -> SignerState {
+) -> frost_secp256k1::SignerState {
     unimplemented!()
 }
 
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1SignR1Output {
-    state: SignerState,
-    // TODO bcast
-}
-
+/// DKG Round 2.
+///
 #[wasm_bindgen]
 pub fn frost_secp256k1_sign_r1(
-    state: SignerState,
+    state: frost_secp256k1::SignerState,
     rng_seed: u64,
-) -> Result<FrostSecp256k1SignR1Output, String> {
+) -> Result<frost_secp256k1::SignR1Output, String> {
     unimplemented!()
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1SignR2Output {
-    state: SignerState,
-    // TODO bcast
 }
 
 /// Signing R2.
@@ -126,18 +61,11 @@ pub struct FrostSecp256k1SignR2Output {
 /// r2_input is like HashMap<u32, Round1Bcast<M>>.
 #[wasm_bindgen]
 pub fn frost_secp256k1_sign_r2(
-    state: SignerState,
+    state: frost_secp256k1::SignerState,
     msg: Vec<u8>,
     r2_input: JsValue,
-) -> Result<FrostSecp256k1SignR2Output, String> {
+) -> Result<frost_secp256k1::SignR2Output, String> {
     unimplemented!()
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct FrostSecp256k1SignR3Output {
-    state: SignerState,
-    // TODO bcast
 }
 
 /// Signing R3.
@@ -145,8 +73,8 @@ pub struct FrostSecp256k1SignR3Output {
 /// r3_input is like HashMap<u32, Round2Bcast<M>>.
 #[wasm_bindgen]
 pub fn frost_secp256k1_sign_r3(
-    state: SignerState,
+    state: frost_secp256k1::SignerState,
     r3_input: JsValue,
-) -> Result<FrostSecp256k1SignR2Output, String> {
+) -> Result<frost_secp256k1::SignR2Output, String> {
     unimplemented!()
 }
