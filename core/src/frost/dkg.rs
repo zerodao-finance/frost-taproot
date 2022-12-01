@@ -3,12 +3,15 @@ use std::collections::*;
 use elliptic_curve as ec;
 use ff::{Field, PrimeField};
 use rand::{CryptoRng, RngCore};
+use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, TryFromInto};
 use thiserror::Error;
 use vsss_rs::Share as ShamirShare;
 use vsss_rs::{Feldman, FeldmanVerifier};
 
 use ec::group::{Group, GroupEncoding};
 
+use super::serde::*;
 use super::{hash, math::*, sig};
 
 #[derive(Debug, Error)]
@@ -23,19 +26,31 @@ pub enum Error {
     Unimplemented,
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InitParticipantState<M: Math> {
     // Setup variables
     id: u32,
+
+    #[serde_as(as = "TryFromInto<FeldmanSerde>")]
     feldman: Feldman,
-    other_participant_shares: HashMap<u32, ParticipantData<M>>,
+    other_participants: Vec<u32>,
+    //other_participant_shares: HashMap<u32, ParticipantData<M>>,
     ctx: Vec<u8>,
+
+    _pd: ::std::marker::PhantomData<M>,
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct R1ParticipantState<M: Math> {
     // Setup variables
     id: u32,
+
+    #[serde_as(as = "TryFromInto<FeldmanSerde>")]
     feldman: Feldman,
-    other_participant_shares: HashMap<u32, ParticipantData<M>>,
+    other_participants: Vec<u32>,
+    //other_participant_shares: HashMap<u32, ParticipantData<M>>,
     ctx: Vec<u8>,
 
     // Round 1 variables
@@ -43,11 +58,16 @@ pub struct R1ParticipantState<M: Math> {
     secret_shares: Vec<ShamirShare>,
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct R2ParticipantState<M: Math> {
     // Setup variables
     id: u32,
+
+    #[serde_as(as = "TryFromInto<FeldmanSerde>")]
     feldman: Feldman,
-    other_participant_shares: HashMap<u32, ParticipantData<M>>,
+    other_participants: Vec<u32>,
+    //other_participant_shares: HashMap<u32, ParticipantData<M>>,
     ctx: Vec<u8>,
 
     // Round 1 variables
@@ -55,8 +75,13 @@ pub struct R2ParticipantState<M: Math> {
     secret_shares: Vec<ShamirShare>,
 
     // Round 2 variables
+    #[serde_as(as = "ScalarSerde")]
     sk_share: <M::G as Group>::Scalar,
+
+    #[serde_as(as = "PointSerde")]
     vk: M::G,
+
+    #[serde_as(as = "PointSerde")]
     vk_share: M::G,
 }
 
@@ -96,12 +121,11 @@ impl<M: Math> R2ParticipantState<M> {
 }
 
 // TODO Decide how much of this we actually need.
-#[allow(unused)]
-#[derive(Clone)]
+/*#[derive(Clone, Debug, Serialize, Deserialize)]
 struct ParticipantData<M: Math> {
-    share: Option<ShamirShare>,
-    verifiers: Option<FeldmanVerifier<<M::G as Group>::Scalar, M::G>>,
-}
+    share: ShamirShare,
+    verifiers: FeldmanVerifier<<M::G as Group>::Scalar, M::G>,
+}*/
 
 impl<M: Math> InitParticipantState<M> {
     pub fn new(
@@ -125,7 +149,7 @@ impl<M: Math> InitParticipantState<M> {
             t: thresh as usize,
         };
 
-        let mut other_participant_shares = HashMap::new();
+        /*let mut other_participant_shares = HashMap::new();
         for opid in other_participants {
             let pd: ParticipantData<M> = ParticipantData {
                 share: None,
@@ -133,13 +157,15 @@ impl<M: Math> InitParticipantState<M> {
             };
 
             other_participant_shares.insert(opid, pd);
-        }
+        }*/
 
         Ok(InitParticipantState {
             id,
             feldman,
-            other_participant_shares,
+            other_participants,
+            //other_participant_shares,
             ctx,
+            _pd: ::std::marker::PhantomData,
         })
     }
 }
@@ -234,7 +260,7 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
 
     // Step 7 - P2PSend f_i(j) to each participant Pj and keep (i, f_j(i)) for himself
     let mut p2p_send = HashMap::new();
-    for oid in participant.other_participant_shares.keys() {
+    for oid in &participant.other_participants {
         let share = shares[*oid as usize - 1].clone();
         eprintln!("share {} -> {}: {:?}", participant.id, oid, share);
         p2p_send.insert(*oid, share);
@@ -244,7 +270,8 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
     let r1ps = R1ParticipantState {
         id: participant.id,
         feldman: participant.feldman,
-        other_participant_shares: participant.other_participant_shares.clone(),
+        other_participants: participant.other_participants.clone(),
+        //other_participant_shares: participant.other_participant_shares.clone(),
         ctx: participant.ctx.clone(),
         verifier,
         secret_shares: shares,
@@ -414,7 +441,8 @@ pub fn round_2<M: Math>(
     let r2ps = R2ParticipantState {
         id: participant.id,
         feldman: participant.feldman,
-        other_participant_shares: participant.other_participant_shares.clone(),
+        other_participants: participant.other_participants.clone(),
+        //other_participant_shares: participant.other_participant_shares.clone(),
         ctx: participant.ctx.clone(),
         verifier: participant.verifier.clone(),
         secret_shares: participant.secret_shares.clone(),
