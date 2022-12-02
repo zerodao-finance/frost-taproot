@@ -4,6 +4,8 @@ pub use elliptic_curve::ScalarArithmetic;
 use elliptic_curve::{IsHigh, ProjectiveArithmetic};
 pub use ff::{Field, PrimeField};
 
+use super::sig::Signature;
+
 pub trait Math: Clone {
     type C: elliptic_curve::Curve
         + elliptic_curve::AffineArithmetic
@@ -11,6 +13,12 @@ pub trait Math: Clone {
 
     type F: PrimeField;
     type G: Group + GroupEncoding + Default + ScalarMul<Self::F>;
+
+    /// Native public key type.
+    type Pk;
+
+    /// Native signature type.
+    type Sig;
 
     fn scalar_repr_from_bytes(
         buf: &[u8],
@@ -22,6 +30,12 @@ pub trait Math: Clone {
 
     /// Returns if the group element is "negative".
     fn group_point_is_negative(e: Self::G) -> bool;
+
+    /// Converts a point from the internal representation to the native type.
+    fn conv_pk(e: Self::G) -> Self::Pk;
+
+    /// Converts a sig from our internal representation to the native type.
+    fn conv_sig(sig: Signature<Self>) -> Self::Sig;
 }
 
 #[derive(Clone, Debug)]
@@ -33,6 +47,10 @@ impl Math for Secp256k1Math {
     type F = k256::Scalar;
 
     type G = k256::ProjectivePoint;
+
+    type Pk = k256::PublicKey;
+
+    type Sig = k256::schnorr::Signature;
 
     fn scalar_repr_from_bytes(
         buf: &[u8],
@@ -71,6 +89,17 @@ impl Math for Secp256k1Math {
 
         // "high" means zero or positive here, so if it's false then it must be negative.
         !bool::from(y_fb.is_high())
+    }
+
+    fn conv_pk(e: Self::G) -> Self::Pk {
+        // We check that it's x-only later.
+        k256::PublicKey::from_affine(e.to_affine()).expect("k256 invalid public key")
+    }
+
+    fn conv_sig(sig: Signature<Self>) -> Self::Sig {
+        let buf = sig.to_bytes();
+        k256::schnorr::Signature::try_from(buf.as_slice())
+            .expect("k256: invalid signature encoding")
     }
 }
 

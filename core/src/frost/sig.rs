@@ -33,7 +33,10 @@ impl<M: Math> SchnorrPubkey<M> {
 
 #[derive(Clone)]
 pub struct Signature<M: Math> {
+    /// The "r" in the standard math.
     pub z: <M::G as Group>::Scalar,
+
+    /// The "s" in the standard math.
     pub c: <M::G as Group>::Scalar,
 }
 
@@ -88,6 +91,7 @@ impl<M: Math> PartialEq for Signature<M> {
     }
 }
 
+/// Verifies a signature using a standard challenge deriver.
 pub fn verify<M: Math, C: ChallengeDeriver<M>>(
     cderiv: &C,
     pk: &SchnorrPubkey<M>,
