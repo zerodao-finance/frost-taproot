@@ -2,12 +2,15 @@ use std::collections::*;
 use std::fmt;
 
 use rand::Rng;
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use thiserror::Error;
 
 use super::challenge::*;
 use super::dkg;
 use super::hash::*;
 use super::math::*;
+use super::serde::*;
 use super::sig::{SchnorrPubkey, Signature};
 
 #[derive(Debug, Error)]
@@ -34,21 +37,30 @@ pub enum Error {
     Unimplemented,
 }
 
-#[derive(Clone)]
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SignerState<M: Math, C: ChallengeDeriver<M>> {
     // Setup variables
     id: u32,
     thresh: u32,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     sk_share: <M::G as Group>::Scalar,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     vk_share: M::G,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     vk: M::G,
-    lcoeffs: HashMap<u32, <M::G as Group>::Scalar>,
+
+    lcoeffs: HashMap<u32, WrappedScalar<M>>,
+
     cosigners: Vec<u32>,
     state: Inner<M>,
     challenge_deriver: C,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Inner<M: Math> {
     Init,
     R1(R1InnerState<M>),
@@ -67,26 +79,45 @@ impl<M: Math> Inner<M> {
     }
 }
 
-#[derive(Clone)]
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct R1InnerState<M: Math> {
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     cap_d: M::G,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     cap_e: M::G,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     small_d: <M::G as Group>::Scalar,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     small_e: <M::G as Group>::Scalar,
 }
 
-#[derive(Clone)]
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct R2InnerState<M: Math> {
     // Copied from round 1.
     // No small_d or small_e since they're one-time use.
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     cap_d: M::G,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     cap_e: M::G,
 
     // Round 2.
     commitments: HashMap<u32, Round1Bcast<M>>,
+
+    #[serde(with = "hex")]
     msg: Vec<u8>,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     c: <M::G as Group>::Scalar,
-    cap_rs: HashMap<u32, M::G>,
+
+    cap_rs: HashMap<u32, WrappedPoint<M>>,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     sum_r: M::G,
 }
 
@@ -139,6 +170,12 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
             return Err(Error::CoeffsCosignersMismatch);
         }
 
+        // Wrap them in the serde-able type.
+        let lcoeffs = lcoeffs
+            .into_iter()
+            .map(|(k, v)| (k, WrappedScalar(v)))
+            .collect::<_>();
+
         Ok(SignerState {
             id,
             thresh,
@@ -153,22 +190,39 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
     }
 }
 
-#[derive(Clone)]
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round1Bcast<M: Math> {
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     pub di: M::G,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     pub ei: M::G,
 }
 
-#[derive(Clone)]
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round2Bcast<M: Math> {
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     pub zi: <M::G as Group>::Scalar,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     pub vki: M::G,
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round3Bcast<M: Math> {
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     pub r: M::G,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     pub z: <M::G as Group>::Scalar,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     pub c: <M::G as Group>::Scalar,
+
+    #[serde(with = "hex")]
     pub msg: Vec<u8>,
 }
 
@@ -274,7 +328,7 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
     // Step 3-6
     let mut sum_r = <M::G as Group>::identity();
     let mut ri = <<M::G as Group>::Scalar as Field>::zero();
-    let mut rs = HashMap::<u32, M::G>::new();
+    let mut rs = HashMap::<u32, WrappedPoint<M>>::new();
     for (id, data) in round2_input {
         // Construct the blob (j, m, {Dj, Ej})
         let blob = concat_hash_array(*id, &msg, &round2_input, &signer.cosigners);
@@ -288,7 +342,7 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
         // Step 5 - R_j = D_j + r_j*E_j
         let rj_ej = data.ei * rj;
         let rj = rj_ej + data.di;
-        rs.insert(*id, rj);
+        rs.insert(*id, WrappedPoint(rj));
 
         // Step 6 - R = R+Rj
         sum_r += rj;
@@ -300,7 +354,7 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
         .derive_challenge(&msg, signer.vk, sum_r);
 
     // Step 9 - zi = di + ei*ri + Li*ski*c
-    let li = signer.lcoeffs[&signer.id];
+    let li = signer.lcoeffs[&signer.id].0;
     let liski = li * signer.sk_share;
     let liskic = liski * c;
 
@@ -409,13 +463,13 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
         let zjg = <M::G as Group>::generator() * zj;
 
         // c*Lj
-        let clj = signer_c * signer.lcoeffs[id];
+        let clj = signer_c * signer.lcoeffs[id].0;
 
         // cLjvkj
         let cljvkj = vkj * clj;
 
         // Rj + c*Lj*vkj
-        let mut rj = signer_rs[id];
+        let mut rj = signer_rs[id].0;
 
         // see above
         if negate {

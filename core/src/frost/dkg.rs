@@ -36,6 +36,7 @@ pub struct InitParticipantState<M: Math> {
     feldman: Feldman,
     other_participants: Vec<u32>,
     //other_participant_shares: HashMap<u32, ParticipantData<M>>,
+    #[serde(with = "hex")]
     ctx: Vec<u8>,
 
     _pd: ::std::marker::PhantomData<M>,
@@ -51,6 +52,7 @@ pub struct R1ParticipantState<M: Math> {
     feldman: Feldman,
     other_participants: Vec<u32>,
     //other_participant_shares: HashMap<u32, ParticipantData<M>>,
+    #[serde(with = "hex")]
     ctx: Vec<u8>,
 
     // Round 1 variables
@@ -68,6 +70,7 @@ pub struct R2ParticipantState<M: Math> {
     feldman: Feldman,
     other_participants: Vec<u32>,
     //other_participant_shares: HashMap<u32, ParticipantData<M>>,
+    #[serde(with = "hex")]
     ctx: Vec<u8>,
 
     // Round 1 variables
@@ -75,13 +78,13 @@ pub struct R2ParticipantState<M: Math> {
     secret_shares: Vec<ShamirShare>,
 
     // Round 2 variables
-    #[serde_as(as = "ScalarSerde")]
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     sk_share: <M::G as Group>::Scalar,
 
-    #[serde_as(as = "PointSerde")]
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     vk: M::G,
 
-    #[serde_as(as = "PointSerde")]
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     vk_share: M::G,
 }
 
@@ -170,12 +173,20 @@ impl<M: Math> InitParticipantState<M> {
     }
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round1Bcast<M: Math> {
     verifiers: FeldmanVerifier<<M::G as Group>::Scalar, M::G>,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     wi: <M::G as Group>::Scalar,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     ci: <M::G as Group>::Scalar,
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round1Result<M: Math> {
     pub broadcast: Round1Bcast<M>,
     pub p2p: ShamirShare,
@@ -280,8 +291,13 @@ pub fn round_1<M: Math, R: RngCore + CryptoRng>(
     Ok((r1ps, r1bc, p2p_send))
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round2Bcast<M: Math> {
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     pub vk: M::G,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
     pub vk_share: M::G,
 }
 

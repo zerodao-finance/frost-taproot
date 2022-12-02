@@ -1,15 +1,16 @@
-pub use ec::group::{Curve, Group, GroupEncoding, ScalarMul};
-use ec::sec1::ToEncodedPoint;
-pub use ec::ScalarArithmetic;
-use ec::{IsHigh, ProjectiveArithmetic};
-use elliptic_curve as ec;
+pub use elliptic_curve::group::{Group, GroupEncoding, ScalarMul};
+use elliptic_curve::sec1::ToEncodedPoint;
+pub use elliptic_curve::ScalarArithmetic;
+use elliptic_curve::{IsHigh, ProjectiveArithmetic};
 pub use ff::{Field, PrimeField};
 
 pub trait Math: Clone {
+    type C: elliptic_curve::Curve
+        + elliptic_curve::AffineArithmetic
+        + elliptic_curve::ProjectiveArithmetic;
+
     type F: PrimeField;
     type G: Group + GroupEncoding + Default + ScalarMul<Self::F>;
-    type Pk;
-    type Sig;
 
     fn scalar_repr_from_bytes(
         buf: &[u8],
@@ -27,13 +28,11 @@ pub trait Math: Clone {
 pub struct Secp256k1Math;
 
 impl Math for Secp256k1Math {
+    type C = k256::Secp256k1;
+
     type F = k256::Scalar;
 
     type G = k256::ProjectivePoint;
-
-    type Pk = k256::schnorr::Signature;
-
-    type Sig = k256::schnorr::Signature;
 
     fn scalar_repr_from_bytes(
         buf: &[u8],
