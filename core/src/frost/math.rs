@@ -4,7 +4,7 @@ pub use elliptic_curve::ScalarArithmetic;
 use elliptic_curve::{IsHigh, ProjectiveArithmetic};
 pub use ff::{Field, PrimeField};
 
-use super::sig::Signature;
+use super::sig::{SchnorrPubkey, Signature};
 
 pub trait Math: Clone {
     type C: elliptic_curve::Curve
@@ -32,7 +32,7 @@ pub trait Math: Clone {
     fn group_point_is_negative(e: Self::G) -> bool;
 
     /// Converts a point from the internal representation to the native type.
-    fn conv_pk(e: Self::G) -> Self::Pk;
+    fn conv_pk(e: SchnorrPubkey<Self>) -> Self::Pk;
 
     /// Converts a sig from our internal representation to the native type.
     fn conv_sig(sig: Signature<Self>) -> Self::Sig;
@@ -91,9 +91,9 @@ impl Math for Secp256k1Math {
         !bool::from(y_fb.is_high())
     }
 
-    fn conv_pk(e: Self::G) -> Self::Pk {
+    fn conv_pk(e: SchnorrPubkey<Self>) -> Self::Pk {
         // We check that it's x-only later.
-        k256::PublicKey::from_affine(e.to_affine()).expect("k256 invalid public key")
+        k256::PublicKey::from_affine(e.y.to_affine()).expect("k256 invalid public key")
     }
 
     fn conv_sig(sig: Signature<Self>) -> Self::Sig {

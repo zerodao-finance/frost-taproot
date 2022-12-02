@@ -176,13 +176,13 @@ impl<M: Math> InitParticipantState<M> {
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round1Bcast<M: Math> {
-    verifiers: FeldmanVerifier<<M::G as Group>::Scalar, M::G>,
+    pub verifiers: FeldmanVerifier<<M::G as Group>::Scalar, M::G>,
 
     #[serde_as(as = "Marshal<ScalarSerde<M>>")]
-    wi: <M::G as Group>::Scalar,
+    pub wi: <M::G as Group>::Scalar,
 
     #[serde_as(as = "Marshal<ScalarSerde<M>>")]
-    ci: <M::G as Group>::Scalar,
+    pub ci: <M::G as Group>::Scalar,
 }
 
 #[serde_as]

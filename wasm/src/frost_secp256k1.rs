@@ -1,97 +1,41 @@
 use std::collections::*;
 
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use wasm_bindgen::prelude::*;
 
 use krustology_core::frost::math::{Math, Secp256k1Math};
 
-/// Feldman verifier.
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct SerdeFV(
-    vsss_rs::FeldmanVerifier<<Secp256k1Math as Math>::F, <Secp256k1Math as Math>::G>,
-);
+pub use krustology_core::frost::{dkg, serde as fserde};
 
-/// Shamir share.
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct SerdeSS(Vec<u8>);
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct SerdeScalar(Vec<u8>);
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct SerdePoint(Vec<u8>);
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct DkgInitState {
-    id: u32,
-    feldman: (u32, u32),
-    other_shares: HashMap<u32, DkgParticipantData>,
-    ctx: Vec<u8>,
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-struct DkgParticipantData {
-    share: Option<SerdeSS>,
-    verifiers: Option<SerdeFV>,
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct DkgR1State {
-    id: u32,
-    feldman: (u32, u32),
-    other_shares: HashMap<u32, DkgParticipantData>,
-    ctx: Vec<u8>,
-    verifier: SerdeFV,
-    secret_shares: Vec<SerdeSS>,
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct DkgR2State {
-    id: u32,
-    feldman: (u32, u32),
-    sk_share: SerdeScalar,
-    vk: SerdePoint,
-    vk_share: SerdePoint,
-}
-
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize)]
 pub struct DkgR1Output {
-    state: DkgR1State,
-    bcast: DkgR1Bcast,
-    sends: HashMap<u32, SerdeSS>,
+    pub state: dkg::R1ParticipantState<Secp256k1Math>,
+    pub bcast: DkgR1Bcast,
+    pub sends: HashMap<u32, serde_bytes::ByteBuf>,
 }
 
-#[wasm_bindgen]
+#[serde_as]
 #[derive(Serialize, Deserialize)]
 pub struct DkgR1Bcast {
-    verifiers: SerdeFV,
-    wi: SerdeScalar,
-    ci: SerdeScalar,
+    pub verifiers: SerdeFV,
+    pub wi: fserde::WrappedScalar<Secp256k1Math>,
+    pub ci: fserde::WrappedScalar<Secp256k1Math>,
 }
 
-#[wasm_bindgen]
+/// Feldman verifier.
 #[derive(Serialize, Deserialize)]
-pub struct DkgR2Bcast {
-    vk: SerdePoint,
-    vk_share: SerdePoint,
-}
+pub struct SerdeFV(
+    pub vsss_rs::FeldmanVerifier<<Secp256k1Math as Math>::F, <Secp256k1Math as Math>::G>,
+);
 
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize)]
 pub struct DkgR2Output {
-    state: DkgR2State,
-    bcast: DkgR2Bcast,
+    pub state: dkg::R2ParticipantState<Secp256k1Math>,
+    pub bcast: dkg::Round2Bcast<Secp256k1Math>,
 }
 
+/*
 #[wasm_bindgen]
 #[derive(Serialize, Deserialize)]
 pub struct SignerState {
@@ -141,3 +85,4 @@ pub struct SignR3Bcast {
     c: SerdeScalar,
     msg: Vec<u8>,
 }
+*/
