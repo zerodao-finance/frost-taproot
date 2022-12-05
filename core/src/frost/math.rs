@@ -3,6 +3,7 @@ use elliptic_curve::sec1::ToEncodedPoint;
 pub use elliptic_curve::ScalarArithmetic;
 use elliptic_curve::{IsHigh, ProjectiveArithmetic};
 pub use ff::{Field, PrimeField};
+use group::Curve;
 
 use super::sig::{SchnorrPubkey, Signature};
 

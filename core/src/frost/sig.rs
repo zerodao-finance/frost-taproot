@@ -1,9 +1,11 @@
 use std::fmt;
 
+use digest::Digest;
 use ec::group::{Curve, Group, GroupEncoding, ScalarMul};
 use ec::sec1::ToEncodedPoint;
 use elliptic_curve as ec;
 use ff::{Field, PrimeField};
+use sha2::Sha256;
 
 use super::challenge::*;
 use super::math::Math;
@@ -104,7 +106,9 @@ pub fn verify<M: Math, C: ChallengeDeriver<M>>(
     let tmp_r = zg + cvk;
 
     // c' = H(m, R')
-    let tmp_c = cderiv.derive_challenge(msg, pk.y, tmp_r);
+    let msg_digest_ga = Sha256::digest(msg);
+    let msg_digest = msg_digest_ga.into();
+    let tmp_c = cderiv.derive_challenge(&msg_digest, pk.y, tmp_r);
 
     // Check c == c'
     tmp_c == sig.c

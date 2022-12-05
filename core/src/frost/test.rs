@@ -1,7 +1,9 @@
 use std::collections::*;
 
+use crate::frost::sig::SchnorrPubkey;
+
 use super::{
-    challenge::UniversalChderiv,
+    challenge::{self, Bip340Chderiv, UniversalChderiv},
     dkg::{self, InitParticipantState},
     math::{self, Field, Group, GroupEncoding, Math, PrimeField},
     sig, thresh,
@@ -86,14 +88,18 @@ fn test_dkg_2of2_works_curve25519() {
 }
  */
 
-fn do_thresh_sign_2of2<M: Math>() {
+const MSG_STR: &str = "cafebabe13371337deadbeef01234567";
+
+fn do_thresh_sign_2of2<M: Math, C: challenge::ChallengeDeriver<M>>(
+    chderiv: &C,
+) -> (SchnorrPubkey<M>, sig::Signature<M>) {
     let (p1, _, p2, _) = do_dkg_2of2::<M>();
     let p1vk = p1.vk();
 
     let is1 =
-        thresh::SignerState::new(&p1, vec![1, 2], UniversalChderiv).expect("test: init signer 1");
+        thresh::SignerState::new(&p1, vec![1, 2], chderiv.clone()).expect("test: init signer 1");
     let is2 =
-        thresh::SignerState::new(&p2, vec![1, 2], UniversalChderiv).expect("test: init signer 2");
+        thresh::SignerState::new(&p2, vec![1, 2], chderiv.clone()).expect("test: init signer 2");
 
     let mut rng = rand::thread_rng();
 
@@ -104,7 +110,7 @@ fn do_thresh_sign_2of2<M: Math>() {
     r1_bcast.insert(1, s1r1_bc);
     r1_bcast.insert(2, s2r1_bc);
 
-    let msg = hex::decode("cafebabe13371337deadbeef01234567").expect("test: parse message");
+    let msg = hex::decode(MSG_STR).expect("test: parse message");
 
     let (r2s1, s1r2_bc) = thresh::round_2(&r1s1, &msg, &r1_bcast).expect("test: s1 round 2");
     let (r2s2, s2r2_bc) = thresh::round_2(&r1s2, &msg, &r1_bcast).expect("test: s2 round 2");
@@ -123,12 +129,37 @@ fn do_thresh_sign_2of2<M: Math>() {
 
     // Assert the signature is correct.
     let p1pk = sig::SchnorrPubkey::from_group_elem(p1vk);
-    assert!(sig::verify(&UniversalChderiv, &p1pk, &msg, &s1_sig));
+    assert!(sig::verify(chderiv, &p1pk, &msg, &s1_sig));
+
+    (p1.to_schnorr_pk(), s1_sig)
 }
 
 #[test]
 fn test_thresh_sign_2of2_works_secp256k1() {
-    do_thresh_sign_2of2::<math::Secp256k1Math>();
+    let (generic_pk, generic_sig) =
+        do_thresh_sign_2of2::<math::Secp256k1Math, _>(&UniversalChderiv);
+
+    let native_pk = math::Secp256k1Math::conv_pk(generic_pk);
+    let native_sig = math::Secp256k1Math::conv_sig(generic_sig);
+
+    //    let msg = hex::decode(MSG_STR).expect("test: parse message");
+
+    //    let native_bip_vk =
+    //        k256::schnorr::VerifyingKey::try_from(native_pk).expect("test: pk not xonly");
+}
+
+/// This currently fails, we aren't currently compliant with BIP340 schnorr sigs right now.
+#[test]
+fn test_thresh_sign_2of2_works_secp256k1_bip340() {
+    let (generic_pk, generic_sig) = do_thresh_sign_2of2::<math::Secp256k1Math, _>(&Bip340Chderiv);
+
+    let native_pk = math::Secp256k1Math::conv_pk(generic_pk);
+    let native_sig = math::Secp256k1Math::conv_sig(generic_sig);
+
+    //    let msg = hex::decode(MSG_STR).expect("test: parse message");
+
+    //    let native_bip_vk =
+    //        k256::schnorr::VerifyingKey::try_from(native_pk).expect("test: pk not xonly");
 }
 
 /*

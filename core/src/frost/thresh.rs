@@ -1,9 +1,11 @@
 use std::collections::*;
 use std::fmt;
 
+use digest::Digest;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+use sha2::Sha256;
 use thiserror::Error;
 
 use super::challenge::*;
@@ -110,7 +112,7 @@ pub struct R2InnerState<M: Math> {
     commitments: HashMap<u32, Round1Bcast<M>>,
 
     #[serde(with = "hex")]
-    msg: Vec<u8>,
+    msg_digest: [u8; 32],
 
     #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     c: <M::G as Group>::Scalar,
@@ -349,9 +351,11 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
     }
 
     // Step 7 - c = H(m, R)
+    let msg_digest_ga = Sha256::digest(msg);
+    let msg_digest = msg_digest_ga.into();
     let c = signer
         .challenge_deriver
-        .derive_challenge(&msg, signer.vk, sum_r);
+        .derive_challenge(&msg_digest, signer.vk, sum_r);
 
     // Step 9 - zi = di + ei*ri + Li*ski*c
     let li = signer.lcoeffs[&signer.id].0;
@@ -374,7 +378,7 @@ pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
         cap_d: r1is.cap_d,
         cap_e: r1is.cap_d,
         commitments: round2_input.clone(),
-        msg: msg.to_vec(),
+        msg_digest,
         c,
         cap_rs: rs,
         sum_r,
@@ -448,7 +452,7 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
 
     let signer_c = r2is.c;
     let signer_rs = r2is.cap_rs.clone();
-    let signer_msg = r2is.msg.as_slice();
+    let signer_msg = r2is.msg_digest;
 
     // Step 1-3
     // Step 1: For j in [1...t]
@@ -494,7 +498,7 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     // Step 6 - c' = H(m, R')
     let tmp_c = signer
         .challenge_deriver
-        .derive_challenge(signer_msg, signer.vk, tmp_r);
+        .derive_challenge(&signer_msg, signer.vk, tmp_r);
 
     // Step 7 - Check c = c'
     if tmp_c != signer_c {
