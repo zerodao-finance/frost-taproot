@@ -1,4 +1,5 @@
 use digest::Digest;
+use ec::ops::Reduce;
 use elliptic_curve as ec;
 pub use ff::{Field, PrimeField};
 use rand::SeedableRng;
@@ -8,6 +9,7 @@ use sha2::Sha256;
 
 use super::hash::*;
 use super::math::{Math, Secp256k1Math};
+use super::sig::SchnorrPubkey;
 
 /// In the Go code this is just a hash-to-field of the serialized inputs, so we
 /// could make this totally general and implement it for all `Math`s, it seems.
@@ -44,20 +46,26 @@ impl ChallengeDeriver<Secp256k1Math> for Bip340Chderiv {
         pk: <Secp256k1Math as Math>::G,
         r: <Secp256k1Math as Math>::G,
     ) -> <<Secp256k1Math as Math>::G as Group>::Scalar {
-        let res = tagged_hash(BIP340_CHALLENGE_TAG)
-            .chain_update(r.to_bytes())
-            .chain_update(&pk.to_affine().to_bytes()[1..33])
-            .chain_update(msg_digest)
-            .finalize();
-        let fb =
-            k256::FieldBytes::try_from(res).expect("chderiv: bip340 cast to field scalar repr");
-        let parsed = k256::Scalar::from_repr(fb);
+        let native_pk = Secp256k1Math::conv_pk(&SchnorrPubkey::from_group_elem(pk));
+        let native_vk =
+            k256::schnorr::VerifyingKey::try_from(native_pk).expect("chderiv: pk not xonly");
 
-        if parsed.is_some().into() {
-            parsed.unwrap()
-        } else {
-            panic!("chderiv: bip340 unrepr to field scalar")
-        }
+        let r_aff: k256::AffinePoint = r.to_affine();
+        use elliptic_curve::AffineXCoordinate;
+        let rx = r_aff.x();
+
+        let mut buf = Vec::new();
+        buf.extend(rx);
+        buf.extend(native_vk.to_bytes());
+        buf.extend(msg_digest);
+        eprintln!("chderiv sign preimag {}", hex::encode(&buf));
+
+        // basically copied from the k256 code
+        let res = tagged_hash(BIP340_CHALLENGE_TAG)
+            .chain_update(buf)
+            .finalize();
+        let e = <k256::Scalar as Reduce<k256::U256>>::from_be_bytes_reduced(res);
+        e
     }
 }
 

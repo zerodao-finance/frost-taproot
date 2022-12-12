@@ -1,15 +1,22 @@
 use std::collections::*;
 
+use digest::Digest;
+use k256::schnorr::signature::hazmat::PrehashVerifier;
+use k256::schnorr::signature::{DigestSigner, DigestVerifier, PrehashSignature};
+use k256::Secp256k1;
+use sha2::Sha256;
+
 use crate::frost::sig::SchnorrPubkey;
 
+use super::sig::TaprootSignature;
 use super::{
     challenge::{self, Bip340Chderiv, UniversalChderiv},
     dkg::{self, InitParticipantState},
-    math::{self, Field, Group, GroupEncoding, Math, PrimeField},
+    math::{self, Field, Group, GroupEncoding, Math, PrimeField, Secp256k1Math},
     sig, thresh,
 };
 
-fn do_dkg_2of2<M: math::Math>() -> (
+fn do_dkg_2of2<M: Math>() -> (
     dkg::R2ParticipantState<M>,
     dkg::Round2Bcast<M>,
     dkg::R2ParticipantState<M>,
@@ -78,28 +85,25 @@ fn do_dkg_2of2<M: math::Math>() -> (
 
 #[test]
 fn test_dkg_2of2_works_secp256k1() {
-    do_dkg_2of2::<math::Secp256k1Math>();
+    do_dkg_2of2::<Secp256k1Math>();
 }
-
-/*
-#[test]
-fn test_dkg_2of2_works_curve25519() {
-    do_dkg_2of2::<math::Curve25519Math>();
-}
- */
 
 const MSG_STR: &str = "cafebabe13371337deadbeef01234567";
 
-fn do_thresh_sign_2of2<M: Math, C: challenge::ChallengeDeriver<M>>(
-    chderiv: &C,
-) -> (SchnorrPubkey<M>, sig::Signature<M>) {
-    let (p1, _, p2, _) = do_dkg_2of2::<M>();
+fn do_secp256k1_thresh_sign_2of2(
+    msg_hash: &[u8; 32],
+) -> (
+    SchnorrPubkey<Secp256k1Math>,
+    sig::Signature<Secp256k1Math>,
+    sig::TaprootSignature<Secp256k1Math>,
+) {
+    let (p1, _, p2, _) = do_dkg_2of2::<Secp256k1Math>();
     let p1vk = p1.vk();
 
     let is1 =
-        thresh::SignerState::new(&p1, vec![1, 2], chderiv.clone()).expect("test: init signer 1");
+        thresh::SignerState::new(&p1, vec![1, 2], Bip340Chderiv).expect("test: init signer 1");
     let is2 =
-        thresh::SignerState::new(&p2, vec![1, 2], chderiv.clone()).expect("test: init signer 2");
+        thresh::SignerState::new(&p2, vec![1, 2], Bip340Chderiv).expect("test: init signer 2");
 
     let mut rng = rand::thread_rng();
 
@@ -110,10 +114,8 @@ fn do_thresh_sign_2of2<M: Math, C: challenge::ChallengeDeriver<M>>(
     r1_bcast.insert(1, s1r1_bc);
     r1_bcast.insert(2, s2r1_bc);
 
-    let msg = hex::decode(MSG_STR).expect("test: parse message");
-
-    let (r2s1, s1r2_bc) = thresh::round_2(&r1s1, &msg, &r1_bcast).expect("test: s1 round 2");
-    let (r2s2, s2r2_bc) = thresh::round_2(&r1s2, &msg, &r1_bcast).expect("test: s2 round 2");
+    let (r2s1, s1r2_bc) = thresh::round_2(&r1s1, &msg_hash, &r1_bcast).expect("test: s1 round 2");
+    let (r2s2, s2r2_bc) = thresh::round_2(&r1s2, &msg_hash, &r1_bcast).expect("test: s2 round 2");
 
     let mut r2_bcast = HashMap::new();
     r2_bcast.insert(1, s1r2_bc);
@@ -127,44 +129,94 @@ fn do_thresh_sign_2of2<M: Math, C: challenge::ChallengeDeriver<M>>(
     let s2_sig = s2r3_bc.to_sig();
     assert_eq!(s1_sig, s2_sig);
 
-    // Assert the signature is correct.
-    let p1pk = sig::SchnorrPubkey::from_group_elem(p1vk);
-    assert!(sig::verify(chderiv, &p1pk, &msg, &s1_sig));
-
-    (p1.to_schnorr_pk(), s1_sig)
-}
-
-#[test]
-fn test_thresh_sign_2of2_works_secp256k1() {
-    let (generic_pk, generic_sig) =
-        do_thresh_sign_2of2::<math::Secp256k1Math, _>(&UniversalChderiv);
-
-    let native_pk = math::Secp256k1Math::conv_pk(generic_pk);
-    let native_sig = math::Secp256k1Math::conv_sig(generic_sig);
-
-    //    let msg = hex::decode(MSG_STR).expect("test: parse message");
-
-    //    let native_bip_vk =
-    //        k256::schnorr::VerifyingKey::try_from(native_pk).expect("test: pk not xonly");
+    (p1.to_schnorr_pk(), s1_sig, s1r3_bc.to_taproot_sig())
 }
 
 /// This currently fails, we aren't currently compliant with BIP340 schnorr sigs right now.
 #[test]
-fn test_thresh_sign_2of2_works_secp256k1_bip340() {
-    let (generic_pk, generic_sig) = do_thresh_sign_2of2::<math::Secp256k1Math, _>(&Bip340Chderiv);
+fn test_secp256k1_thresh_sign_2of2_works_bip340() {
+    let msg = hex::decode(MSG_STR).expect("test: parse message");
+    let msg_digest = Sha256::digest(&msg);
+    let msg_hash = msg_digest.into();
 
-    let native_pk = math::Secp256k1Math::conv_pk(generic_pk);
-    let native_sig = math::Secp256k1Math::conv_sig(generic_sig);
+    let (generic_pk, _, taproot_sig) = do_secp256k1_thresh_sign_2of2(&msg_hash);
 
-    //    let msg = hex::decode(MSG_STR).expect("test: parse message");
+    eprintln!("generic verification");
+    assert!(sig::verify_secp256k1_taproot(
+        &generic_pk,
+        &msg_hash,
+        &taproot_sig
+    ));
 
-    //    let native_bip_vk =
-    //        k256::schnorr::VerifyingKey::try_from(native_pk).expect("test: pk not xonly");
+    let native_pk = math::Secp256k1Math::conv_pk(&generic_pk);
+    let native_sig = math::Secp256k1Math::conv_tapsig(&taproot_sig);
+
+    let native_bip_vk =
+        k256::schnorr::VerifyingKey::try_from(native_pk).expect("test: pk not xonly");
+
+    eprintln!("native verification");
+    if let Err(e) = native_bip_vk.verify_prehashed(&msg_hash, &native_sig) {
+        panic!("sig failed to verify with k256 verifier: {}", e);
+    }
 }
 
-/*
+use super::bip340;
+
 #[test]
-fn test_thresh_sign_2of2_works_curve25519() {
-    do_thresh_sign_2of2::<math::Curve25519Math>();
+fn test_secp256k1_simplesign_bip340() {
+    let msg = hex::decode(MSG_STR).expect("test: parse message");
+    let msg_digest = Sha256::digest(&msg);
+    let msg_hash: [u8; 32] = msg_digest.into();
+
+    let mut rng = rand::rngs::OsRng;
+    let mut sk = k256::Scalar::random(&mut rng);
+    let mut pk = k256::ProjectivePoint::generator() * sk;
+    if !bip340::has_even_y(pk.to_affine()) {
+        sk = -sk;
+        pk = -pk;
+    }
+
+    let pk_tap = SchnorrPubkey::from_group_elem(pk);
+
+    let sig = sig::sign_secp256k1_taproot(sk, &msg_hash, &mut rng);
+
+    assert!(sig::verify_secp256k1_taproot(&pk_tap, &msg_hash, &sig));
+    println!("passed our verifier");
+
+    let pk_native = <Secp256k1Math as Math>::conv_pk(&pk_tap);
+    let sig_native = <Secp256k1Math as Math>::conv_tapsig(&sig);
+
+    let pk_vk = k256::schnorr::VerifyingKey::try_from(pk_native).expect("test: pk not xonly");
+    if let Err(e) = pk_vk.verify_prehashed(&msg_hash, &sig_native) {
+        panic!("test: sig failed native verify: {}", e);
+    }
+    println!("passed std verifier");
 }
-*/
+
+/// Checks that we verify a signature generates from the k256 crate correctly.
+#[test]
+fn test_secp256k1_verify_taproot() {
+    let msg = hex::decode(MSG_STR).expect("test: parse message");
+    let msg_pfx = Sha256::new_with_prefix(&msg);
+    let msg_digest = Sha256::digest(&msg);
+    let msg_hash = msg_digest.into();
+
+    let mut rng = rand::rngs::OsRng;
+    let sk_native = k256::schnorr::SigningKey::random(&mut rng);
+    let pk_native = sk_native.verifying_key();
+
+    //let sk_generic  = k256::Scalar::from_repr(sk_native.to_bytes()).unwrap();
+    let pk_proj = k256::ProjectivePoint::from(pk_native.as_affine());
+    let pk_generic = sig::SchnorrPubkey::from_group_elem(pk_proj);
+
+    let sig = sk_native.sign_digest(msg_pfx);
+    let sig_buf = sig.to_bytes();
+    let sig_generic = sig::TaprootSignature::<Secp256k1Math>::from_bytes(&sig_buf)
+        .expect("test: parse sig as generic");
+
+    assert!(sig::verify_secp256k1_taproot(
+        &pk_generic,
+        &msg_hash,
+        &sig_generic
+    ));
+}

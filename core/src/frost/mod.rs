@@ -1,5 +1,6 @@
 pub mod math;
 
+pub mod bip340;
 pub mod challenge;
 pub mod dkg;
 pub mod hash;

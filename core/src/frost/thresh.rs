@@ -2,17 +2,23 @@ use std::collections::*;
 use std::fmt;
 
 use digest::Digest;
+use elliptic_curve::sec1::Coordinates;
+use elliptic_curve::sec1::ToEncodedPoint;
+use elliptic_curve::subtle::ConditionallySelectable;
+use elliptic_curve::Curve;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use sha2::Sha256;
 use thiserror::Error;
 
+use super::bip340;
 use super::challenge::*;
 use super::dkg;
 use super::hash::*;
 use super::math::*;
 use super::serde::*;
+use super::sig::TaprootSignature;
 use super::sig::{SchnorrPubkey, Signature};
 
 #[derive(Debug, Error)]
@@ -79,48 +85,6 @@ impl<M: Math> Inner<M> {
             Self::Final => 4,
         }
     }
-}
-
-#[serde_as]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct R1InnerState<M: Math> {
-    #[serde_as(as = "Marshal<PointSerde<M>>")]
-    cap_d: M::G,
-
-    #[serde_as(as = "Marshal<PointSerde<M>>")]
-    cap_e: M::G,
-
-    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
-    small_d: <M::G as Group>::Scalar,
-
-    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
-    small_e: <M::G as Group>::Scalar,
-}
-
-#[serde_as]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct R2InnerState<M: Math> {
-    // Copied from round 1.
-    // No small_d or small_e since they're one-time use.
-    #[serde_as(as = "Marshal<PointSerde<M>>")]
-    cap_d: M::G,
-
-    #[serde_as(as = "Marshal<PointSerde<M>>")]
-    cap_e: M::G,
-
-    // Round 2.
-    commitments: HashMap<u32, Round1Bcast<M>>,
-
-    #[serde(with = "hex")]
-    msg_digest: [u8; 32],
-
-    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
-    c: <M::G as Group>::Scalar,
-
-    cap_rs: HashMap<u32, WrappedPoint<M>>,
-
-    #[serde_as(as = "Marshal<PointSerde<M>>")]
-    sum_r: M::G,
 }
 
 impl<M: Math> Default for Inner<M> {
@@ -194,12 +158,104 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct R1InnerState<M: Math> {
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
+    cap_d: M::G,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
+    cap_e: M::G,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
+    small_d: <M::G as Group>::Scalar,
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
+    small_e: <M::G as Group>::Scalar,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round1Bcast<M: Math> {
     #[serde_as(as = "Marshal<PointSerde<M>>")]
     pub di: M::G,
 
     #[serde_as(as = "Marshal<PointSerde<M>>")]
     pub ei: M::G,
+}
+
+#[derive(Debug, Error)]
+pub enum Round1Error {
+    #[error("participant only in round {0}")]
+    WrongRound(u32),
+
+    #[error("unimplemented")]
+    Unimplemented,
+}
+
+/// This is actually the preprocessing step described in some versions, notice
+/// there's no message hash we're deciding to sign being passed in.
+pub fn round_1(
+    signer: &SignerState<Secp256k1Math, Bip340Chderiv>,
+    mut rng: &mut impl Rng,
+) -> Result<
+    (
+        SignerState<Secp256k1Math, Bip340Chderiv>,
+        Round1Bcast<Secp256k1Math>,
+    ),
+    Round1Error,
+> {
+    if signer.state.legacy_round() != 1 {
+        return Err(Round1Error::WrongRound(signer.state.legacy_round()));
+    }
+
+    // Step 1 - Sample di, ei
+    let di = k256::Scalar::random(&mut rng);
+    let ei = k256::Scalar::random(&mut rng);
+
+    // Step 2 - Compute Di, Ei
+    let big_di = k256::ProjectivePoint::GENERATOR * di;
+    let big_ei = k256::ProjectivePoint::GENERATOR * ei;
+
+    // Store di, ei, Di, Ei locally and broadcast Di, Ei
+    let mut nsigner = signer.clone();
+    nsigner.state = Inner::R1(R1InnerState {
+        cap_d: big_di,
+        cap_e: big_ei,
+        small_d: di,
+        small_e: ei,
+    });
+
+    let r1bc = Round1Bcast {
+        di: big_di,
+        ei: big_ei,
+    };
+
+    Ok((nsigner, r1bc))
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct R2InnerState<M: Math> {
+    // Copied from round 1.
+    // No small_d or small_e since they're one-time use.
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
+    cap_d: M::G,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
+    cap_e: M::G,
+
+    // Round 2.
+    commitments: HashMap<u32, Round1Bcast<M>>,
+
+    #[serde(with = "hex")]
+    msg_digest: [u8; 32],
+
+    #[serde_as(as = "Marshal<ScalarSerde<M>>")]
+    c: <M::G as Group>::Scalar,
+
+    cap_rs: HashMap<u32, WrappedPoint<M>>,
+
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
+    sum_r: M::G,
 }
 
 #[serde_as]
@@ -212,9 +268,129 @@ pub struct Round2Bcast<M: Math> {
     pub vki: M::G,
 }
 
+#[derive(Debug, Error)]
+pub enum Round2Error {
+    #[error("participant only in round {0}")]
+    WrongRound(u32),
+
+    #[error("message empty")]
+    MsgEmpty,
+
+    #[error("input bcast size {0} mismatch with thresh {1}")]
+    InputMismatchThresh(u32, u32),
+
+    #[error("unimplemented")]
+    Unimplemented,
+}
+
+pub fn round_2(
+    signer: &SignerState<Secp256k1Math, Bip340Chderiv>,
+    msg_hash: &[u8; 32],
+    round2_input: &HashMap<u32, Round1Bcast<Secp256k1Math>>,
+) -> Result<
+    (
+        SignerState<Secp256k1Math, Bip340Chderiv>,
+        Round2Bcast<Secp256k1Math>,
+    ),
+    Round2Error,
+> {
+    let r1is = match &signer.state {
+        Inner::R1(r1is) => r1is,
+        _ => return Err(Round2Error::WrongRound(signer.state.legacy_round())),
+    };
+
+    // Some checks here we can skip.
+    // * Make sure those private d is not empty and not zero
+    // * Make sure those private e is not empty and not zero
+
+    let r2iu32 = round2_input.len() as u32;
+    if r2iu32 != signer.thresh {
+        return Err(Round2Error::InputMismatchThresh(
+            round2_input.len() as u32,
+            signer.thresh,
+        ));
+    }
+
+    let mut nsigner = signer.clone();
+
+    // Skipped: Step 2 - Check Dj, Ej on the curve and Store round2Input
+
+    // Store Dj, Ej for further usage.
+    // deferred: signer.state.commitments = Some(round2_input);
+
+    // Step 3-6 (all of these r values are rhos in the paper)
+    let mut sum_r = k256::ProjectivePoint::IDENTITY;
+    let mut ri = k256::Scalar::ZERO; // gets overwritten
+    let mut rs = HashMap::<u32, WrappedPoint<Secp256k1Math>>::new();
+    for (id, data) in round2_input {
+        // Construct the binding balue commitment: (j, m, {Dj, Ej})
+        let blob = concat_hash_array(*id, &msg_hash, &round2_input, &signer.cosigners);
+
+        // Step 4 - rj = H(j,m,{Dj,Ej}_{j in [1...t]})
+        // TODO We could make this operation faster by being sloppy with it, it
+        // wouldn't reduce security afaik.
+        let rj = hash_to_field::<k256::Scalar>(&blob);
+        if signer.id == *id {
+            // DOES THIS EVER GET INVOKED???
+            ri = rj;
+        }
+
+        // Step 5 - R_j = D_j + r_j*E_j (now this is the big R)
+        let rj_ej = data.ei * rj;
+        let rj = rj_ej + data.di;
+        rs.insert(*id, WrappedPoint(rj));
+
+        // Step 6 - R = R+Rj
+        sum_r += rj;
+    }
+
+    // Normalize the point.  This math is a little screwy so make sure it's correct.
+    // TODO TODO TODO
+    if bip340::has_even_y(sum_r.to_affine()) {
+        // Figuring out if it's negative or not is hard.  But once we know, flipping it is easy.
+        sum_r = -sum_r;
+    }
+
+    // Step 7 - c = H(m, R)
+    let c = signer
+        .challenge_deriver
+        .derive_challenge(&msg_hash, signer.vk, sum_r);
+
+    // Step 9 - zi = di + (ei * ri) + (Li * ski * c)
+    let li = signer.lcoeffs[&signer.id].0;
+    let liski = li * signer.sk_share;
+    let liskic = liski * c;
+
+    let eiri = r1is.small_e * ri;
+
+    // Compute zi = di + (ei * ri) + (Li * ski * c)
+    let zi = liskic + eiri + r1is.small_d;
+
+    // Step 8 - Record c, R, Rjs
+    nsigner.state = Inner::R2(R2InnerState {
+        cap_d: r1is.cap_d,
+        cap_e: r1is.cap_d,
+        commitments: round2_input.clone(),
+        msg_digest: *msg_hash,
+        c,
+        cap_rs: rs,
+        sum_r,
+    });
+
+    let r2bc = Round2Bcast {
+        zi,
+        vki: signer.vk_share,
+    };
+
+    Ok((nsigner, r2bc))
+}
+
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round3Bcast<M: Math> {
+    #[serde_as(as = "Marshal<PointSerde<M>>")]
+    pub rho: M::G,
+
     #[serde_as(as = "Marshal<PointSerde<M>>")]
     pub r: M::G,
 
@@ -235,184 +411,13 @@ impl<M: Math> Round3Bcast<M> {
             c: self.c,
         }
     }
-}
 
-#[derive(Debug, Error)]
-pub enum Round1Error {
-    #[error("participant only in round {0}")]
-    WrongRound(u32),
-
-    #[error("unimplemented")]
-    Unimplemented,
-}
-
-pub fn round_1<M: Math, C: ChallengeDeriver<M>>(
-    signer: &SignerState<M, C>,
-    mut rng: &mut impl Rng,
-) -> Result<(SignerState<M, C>, Round1Bcast<M>), Round1Error> {
-    if signer.state.legacy_round() != 1 {
-        return Err(Round1Error::WrongRound(signer.state.legacy_round()));
-    }
-
-    // Step 1 - Sample di, ei
-    let di = <<M::G as Group>::Scalar as Field>::random(&mut rng);
-    let ei = <<M::G as Group>::Scalar as Field>::random(&mut rng);
-
-    // Step 2 - Compute Di, Ei
-    let big_di = <M::G as Group>::generator() * di;
-    let big_ei = <M::G as Group>::generator() * ei;
-
-    // Store di, ei, Di, Ei locally and broadcast Di, Ei
-    let mut nsigner = signer.clone();
-    nsigner.state = Inner::R1(R1InnerState {
-        cap_d: big_di,
-        cap_e: big_ei,
-        small_d: di,
-        small_e: ei,
-    });
-
-    let r1bc = Round1Bcast {
-        di: big_di,
-        ei: big_ei,
-    };
-
-    Ok((nsigner, r1bc))
-}
-
-#[derive(Debug, Error)]
-pub enum Round2Error {
-    #[error("participant only in round {0}")]
-    WrongRound(u32),
-
-    #[error("message empty")]
-    MsgEmpty,
-
-    #[error("input bcast size {0} mismatch with thresh {1}")]
-    InputMismatchThresh(u32, u32),
-
-    #[error("unimplemented")]
-    Unimplemented,
-}
-
-pub fn round_2<M: Math, C: ChallengeDeriver<M>>(
-    signer: &SignerState<M, C>,
-    msg: &[u8],
-    round2_input: &HashMap<u32, Round1Bcast<M>>,
-) -> Result<(SignerState<M, C>, Round2Bcast<M>), Round2Error> {
-    let r1is = match &signer.state {
-        Inner::R1(r1is) => r1is,
-        _ => return Err(Round2Error::WrongRound(signer.state.legacy_round())),
-    };
-
-    // Some checks here we can skip.
-    // * Make sure those private d is not empty and not zero
-    // * Make sure those private e is not empty and not zero
-
-    if msg.is_empty() {
-        return Err(Round2Error::MsgEmpty);
-    }
-
-    let r2iu32 = round2_input.len() as u32;
-    if r2iu32 != signer.thresh {
-        return Err(Round2Error::InputMismatchThresh(
-            round2_input.len() as u32,
-            signer.thresh,
-        ));
-    }
-
-    let mut nsigner = signer.clone();
-
-    // Skipped: Step 2 - Check Dj, Ej on the curve and Store round2Input
-
-    // Store Dj, Ej for further usage.
-    // deferred: signer.state.commitments = Some(round2_input);
-
-    // Step 3-6
-    let mut sum_r = <M::G as Group>::identity();
-    let mut ri = <<M::G as Group>::Scalar as Field>::zero();
-    let mut rs = HashMap::<u32, WrappedPoint<M>>::new();
-    for (id, data) in round2_input {
-        // Construct the blob (j, m, {Dj, Ej})
-        let blob = concat_hash_array(*id, &msg, &round2_input, &signer.cosigners);
-
-        // Step 4 - rj = H(j,m,{Dj,Ej}_{j in [1...t]})
-        let rj = hash_to_field::<<M::G as Group>::Scalar>(&blob);
-        if signer.id == *id {
-            ri = rj;
+    pub fn to_taproot_sig(&self) -> TaprootSignature<M> {
+        TaprootSignature {
+            r: self.r,
+            s: self.z,
         }
-
-        // Step 5 - R_j = D_j + r_j*E_j
-        let rj_ej = data.ei * rj;
-        let rj = rj_ej + data.di;
-        rs.insert(*id, WrappedPoint(rj));
-
-        // Step 6 - R = R+Rj
-        sum_r += rj;
     }
-
-    // Step 7 - c = H(m, R)
-    let msg_digest_ga = Sha256::digest(msg);
-    let msg_digest = msg_digest_ga.into();
-    let c = signer
-        .challenge_deriver
-        .derive_challenge(&msg_digest, signer.vk, sum_r);
-
-    // Step 9 - zi = di + ei*ri + Li*ski*c
-    let li = signer.lcoeffs[&signer.id].0;
-    let liski = li * signer.sk_share;
-    let liskic = liski * c;
-
-    // Normalize the point.  This math is a little screwy so make sure it's correct.
-    if M::group_point_is_negative(sum_r) {
-        // Figuring out if it's negative or not is hard.  But once we know, flipping it is easy.
-        sum_r = -sum_r;
-    }
-
-    let eiri = r1is.small_e * ri;
-
-    // Compute zi = di+ei*ri+Li*ski*c
-    let zi = liskic + eiri + r1is.small_d;
-
-    // Step 8 - Record c, R, Rjs
-    nsigner.state = Inner::R2(R2InnerState {
-        cap_d: r1is.cap_d,
-        cap_e: r1is.cap_d,
-        commitments: round2_input.clone(),
-        msg_digest,
-        c,
-        cap_rs: rs,
-        sum_r,
-    });
-
-    let r2bc = Round2Bcast {
-        zi,
-        vki: signer.vk_share,
-    };
-
-    Ok((nsigner, r2bc))
-}
-
-fn concat_hash_array<M: Math>(
-    id: u32,
-    msg: &[u8],
-    r2i: &HashMap<u32, Round1Bcast<M>>,
-    cosigners: &[u32],
-) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.extend(u32::to_be_bytes(id));
-    buf.extend(msg);
-
-    for cosig_id in cosigners {
-        buf.extend(u32::to_be_bytes(*cosig_id));
-        let r1b = &r2i[cosig_id];
-
-        let bigdi_bytes = r1b.di.to_bytes(); // `.to_affine()`?
-        let bigei_bytes = r1b.ei.to_bytes(); // `.to_affine()`?
-        buf.extend(bigdi_bytes.as_ref());
-        buf.extend(bigei_bytes.as_ref());
-    }
-
-    buf
 }
 
 #[derive(Debug, Error)]
@@ -433,10 +438,16 @@ pub enum Round3Error {
     Unimplemented,
 }
 
-pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
-    signer: &SignerState<M, C>,
-    round3_input: &HashMap<u32, Round2Bcast<M>>,
-) -> Result<(SignerState<M, C>, Round3Bcast<M>), Round3Error> {
+pub fn round_3(
+    signer: &SignerState<Secp256k1Math, Bip340Chderiv>,
+    round3_input: &HashMap<u32, Round2Bcast<Secp256k1Math>>,
+) -> Result<
+    (
+        SignerState<Secp256k1Math, Bip340Chderiv>,
+        Round3Bcast<Secp256k1Math>,
+    ),
+    Round3Error,
+> {
     let r2is = match &signer.state {
         Inner::R2(r2is) => r2is,
         _ => return Err(Round3Error::WrongRound(signer.state.legacy_round())),
@@ -456,15 +467,15 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
 
     // Step 1-3
     // Step 1: For j in [1...t]
-    let mut z = <<M::G as Group>::Scalar as Field>::zero();
-    let negate = M::group_point_is_negative(r2is.sum_r); // TODO verify correctness
+    let mut z = k256::Scalar::zero();
+    let flip_parity = !bip340::has_even_y(r2is.sum_r.to_affine());
     for (id, data) in round3_input {
         let zj = data.zi;
         let vkj = data.vki;
 
         // Step 2: Verify zj*G = Rj + c*Lj*vkj
         // zj*G
-        let zjg = <M::G as Group>::generator() * zj;
+        let zjg = k256::ProjectivePoint::GENERATOR * zj;
 
         // c*Lj
         let clj = signer_c * signer.lcoeffs[id].0;
@@ -476,8 +487,8 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
         let mut rj = signer_rs[id].0;
 
         // see above
-        if negate {
-            rj = -rj;
+        if flip_parity {
+            rj = k256::ProjectivePoint::from(bip340::flip(rj.to_affine()));
         }
 
         let right = cljvkj + rj;
@@ -491,9 +502,9 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     }
 
     // Step 4 - 7: Self verify the signature (z, c)
-    let zg = <M::G as Group>::generator() * z;
-    let cvk = signer.vk * -signer_c; // additive not multiplicative!
-    let tmp_r = zg + cvk;
+    let zg = k256::ProjectivePoint::GENERATOR * z; // r
+    let cvk = signer.vk * signer_c; // additive not multiplicative!
+    let tmp_r = zg - cvk;
 
     // Step 6 - c' = H(m, R')
     let tmp_c = signer
@@ -514,13 +525,41 @@ pub fn round_3<M: Math, C: ChallengeDeriver<M>>(
     nsigner.state = Inner::Final;
 
     let r3bc = Round3Bcast {
-        r: r2is.sum_r,
+        rho: r2is.sum_r,
+        r: zg,
         z,
         c: signer_c,
         msg: signer_msg.to_vec(),
     };
 
+    let rbuf = r2is.sum_r.to_bytes().to_vec();
+    eprintln!("thresh r buf {}", hex::encode(rbuf));
+
     Ok((nsigner, r3bc))
+}
+
+/// Builds a commitment, used for the H_1 in the paper.
+fn concat_hash_array<M: Math>(
+    id: u32,
+    msg_hash: &[u8; 32],
+    r2i: &HashMap<u32, Round1Bcast<M>>,
+    cosigners: &[u32],
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend(u32::to_be_bytes(id));
+    buf.extend(msg_hash);
+
+    for cosig_id in cosigners {
+        buf.extend(u32::to_be_bytes(*cosig_id));
+        let r1b = &r2i[cosig_id];
+
+        let bigdi_bytes = r1b.di.to_bytes(); // `.to_affine()`?
+        let bigei_bytes = r1b.ei.to_bytes(); // `.to_affine()`?
+        buf.extend(bigdi_bytes.as_ref());
+        buf.extend(bigei_bytes.as_ref());
+    }
+
+    buf
 }
 
 /// Basically just gets a version of a number in the scalar field since we can't

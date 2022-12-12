@@ -452,7 +452,20 @@ pub fn round_2<M: Math>(
     }
 
     // Step 7 - Compute verification key share vki = ski*G and store.
-    let vk_share = M::G::generator() * sk;
+    let mut vk_share = M::G::generator() * sk;
+
+    // Step 7.5 - (FOR TAPROOT) If the y-coordinate of the point if negative,
+    // flip all the shares.
+    //
+    // FIXME This doesn't work.
+    //
+    // TODO Verify there's nothing else we should flip.
+    //if M::group_point_is_negative(vk) {
+    //    eprintln!("[!!!] inverting everything to make it a positive pk");
+    //    sk = -sk;
+    //    vk = -vk;
+    //    vk_share = -vk;
+    //}
 
     let r2ps = R2ParticipantState {
         id: participant.id,
