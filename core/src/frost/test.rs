@@ -12,25 +12,25 @@ use super::sig::TaprootSignature;
 use super::{
     challenge::{self, Bip340Chderiv, UniversalChderiv},
     dkg::{self, InitParticipantState},
-    math::{self, Field, Group, GroupEncoding, Math, PrimeField, Secp256k1Math},
+    math::{self, Field, GroupEncoding, Math, PrimeField, Secp256k1Math},
     sig, thresh,
 };
 
-fn do_dkg_2of2<M: Math>() -> (
-    dkg::R2ParticipantState<M>,
-    dkg::Round2Bcast<M>,
-    dkg::R2ParticipantState<M>,
-    dkg::Round2Bcast<M>,
+fn do_secp256k1_dkg_2of2() -> (
+    dkg::R2ParticipantState<Secp256k1Math>,
+    dkg::Round2Bcast<Secp256k1Math>,
+    dkg::R2ParticipantState<Secp256k1Math>,
+    dkg::Round2Bcast<Secp256k1Math>,
 ) {
-    let ip1 = InitParticipantState::<M>::new(1, 2, vec![0xff], vec![2])
+    let ip1 = InitParticipantState::<Secp256k1Math>::new(1, 2, vec![0xff], vec![2])
         .expect("test: init participant 1");
-    let ip2 = InitParticipantState::<M>::new(2, 2, vec![0xff], vec![1])
+    let ip2 = InitParticipantState::<Secp256k1Math>::new(2, 2, vec![0xff], vec![1])
         .expect("test: init participant 2");
 
     let mut rng = rand::thread_rng();
 
-    let p1r1_secret = <<M::G as Group>::Scalar as Field>::random(&mut rng);
-    let p2r1_secret = <<M::G as Group>::Scalar as Field>::random(&mut rng);
+    let p1r1_secret = k256::Scalar::random(&mut rng);
+    let p2r1_secret = k256::Scalar::random(&mut rng);
 
     let (r1p1, p1r1_bc, p1r1_s) =
         dkg::round_1(&ip1, p1r1_secret, &mut rng).expect("test: p1 round 1");
@@ -56,23 +56,23 @@ fn do_dkg_2of2<M: Math>() -> (
     // Extract and parse the shares.
     let mut p1_s_bytes = vec![1];
     let p1_sk_share = r2p1.sk_share();
-    p1_s_bytes.extend(M::scalar_repr_to_bytes(p1_sk_share.to_repr()).as_slice());
+    p1_s_bytes.extend(p1_sk_share.to_bytes());
     let p1_sk_ss =
         vsss_rs::Share::try_from(p1_s_bytes.as_slice()).expect("test: p1 parse sk_share bytes");
     let mut p2_s_bytes = vec![2];
     let p2_sk_share = r2p2.sk_share();
-    p2_s_bytes.extend(M::scalar_repr_to_bytes(p2_sk_share.to_repr()).as_slice());
+    p2_s_bytes.extend(p2_sk_share.to_bytes());
     let p2_sk_ss =
         vsss_rs::Share::try_from(p2_s_bytes.as_slice()).expect("test: p2 parse sk_share bytes");
 
     // Recombine them to the "real" sk.
     let shamir = vsss_rs::Shamir { t: 2, n: 2 };
     let sk = shamir
-        .combine_shares::<M::F>(&[p1_sk_ss, p2_sk_ss])
+        .combine_shares::<k256::Scalar>(&[p1_sk_ss, p2_sk_ss])
         .expect("test: parse sk_share");
 
     // Compute the pubkey and see if it's right.
-    let pk = <M::G as Group>::generator() * sk;
+    let pk = k256::ProjectivePoint::GENERATOR * sk;
     eprintln!(
         "p1 vk   {}\nreal pk {}",
         hex::encode(r2p1.vk().to_bytes()),
@@ -80,12 +80,14 @@ fn do_dkg_2of2<M: Math>() -> (
     );
     assert_eq!(r2p1.vk(), pk);
 
+    eprintln!("=== DKG FINISHED");
     (r2p1, p1r2_bc, r2p2, p2r2_bc)
 }
 
 #[test]
-fn test_dkg_2of2_works_secp256k1() {
-    do_dkg_2of2::<Secp256k1Math>();
+fn test_secp256k1_dkg_2of2() {
+    // if no panics then it passed
+    let _ = do_secp256k1_dkg_2of2();
 }
 
 const MSG_STR: &str = "cafebabe13371337deadbeef01234567";
@@ -97,7 +99,7 @@ fn do_secp256k1_thresh_sign_2of2(
     sig::Signature<Secp256k1Math>,
     sig::TaprootSignature<Secp256k1Math>,
 ) {
-    let (p1, _, p2, _) = do_dkg_2of2::<Secp256k1Math>();
+    let (p1, _, p2, _) = do_secp256k1_dkg_2of2();
     let p1vk = p1.vk();
 
     let is1 =
@@ -170,7 +172,7 @@ fn test_secp256k1_simplesign_bip340() {
 
     let mut rng = rand::rngs::OsRng;
     let mut sk = k256::Scalar::random(&mut rng);
-    let mut pk = k256::ProjectivePoint::generator() * sk;
+    let mut pk = k256::ProjectivePoint::GENERATOR * sk;
     if !bip340::has_even_y(pk.to_affine()) {
         sk = -sk;
         pk = -pk;

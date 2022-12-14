@@ -1,10 +1,13 @@
 use std::collections::*;
 
+use digest::Digest;
+use ec::ops::Reduce;
 use elliptic_curve as ec;
 use ff::{Field, PrimeField};
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
+use sha2::Sha256;
 use thiserror::Error;
 use vsss_rs::Share as ShamirShare;
 use vsss_rs::{Feldman, FeldmanVerifier};
@@ -203,47 +206,50 @@ pub enum Round1Error {
     Unimplemented,
 }
 
-pub fn round_1<M: Math, R: RngCore + CryptoRng>(
-    participant: &InitParticipantState<M>,
-    secret: <M::G as Group>::Scalar,
+pub fn round_1<R: RngCore + CryptoRng>(
+    participant: &InitParticipantState<Secp256k1Math>,
+    secret: k256::Scalar,
     rng: &mut R,
-) -> Result<(R1ParticipantState<M>, Round1Bcast<M>, Round1Send), Round1Error> {
+) -> Result<
+    (
+        R1ParticipantState<Secp256k1Math>,
+        Round1Bcast<Secp256k1Math>,
+        Round1Send,
+    ),
+    Round1Error,
+> {
+    eprintln!("round 2");
     // TODO should we check the number of participants?
 
     // There was some stuff here but due to Rust we don't need it.
     let s = secret;
-    let sg = <M::G as Group>::generator() * s;
+    let sg = k256::ProjectivePoint::GENERATOR * s;
     eprintln!(
         "secret {} {:?} {}",
         participant.id,
         s,
-        hex::encode(sg.to_bytes().as_ref())
+        hex::encode(sg.to_bytes())
     );
 
     // Step 1 - (Aj0,...Ajt), (xi1,...,xin) <- FeldmanShare(s)
     let (shares, verifier) = participant
         .feldman
-        .split_secret::<<M::G as Group>::Scalar, M::G, _>(s, None, rng)
+        .split_secret::<k256::Scalar, k256::ProjectivePoint, _>(s, None, rng)
         .map_err(Round1Error::Feldman)?;
 
     // Step 2 - Sample ki <- Z_q
-    let ki = <M::G as Group>::Scalar::random(rng);
+    let ki = k256::Scalar::random(rng);
 
     // Step 3 - Compute Ri = ki*G
-    let ri = <M::G as Group>::generator() * ki;
+    let ri = k256::ProjectivePoint::GENERATOR * ki;
 
     // Step 4 - Compute Ci = H(i, CTX, g^{a_(i,0)}, R_i), where CTX is fixed context string
-    let mut buf = Vec::new();
-    buf.extend(u32::to_be_bytes(participant.id));
-    buf.extend(u64::to_be_bytes(participant.ctx.len() as u64));
-    buf.extend(&participant.ctx);
-    buf.extend(verifier.commitments[0].to_bytes().as_ref());
-    buf.push(0xff); // EXTRA
-    buf.extend(ri.to_bytes().as_ref());
-    eprintln!("round1 {}   {}", participant.id, hex::encode(&buf));
-
-    // Figure out the hash-to-field thing.
-    let ci = hash::hash_to_field::<<M::G as Group>::Scalar>(&buf);
+    let ci = compute_nizk_hash(
+        participant.id,
+        &participant.ctx,
+        verifier.commitments[0].to_affine(),
+        ri.to_affine(),
+    );
 
     // Step 5 - Compute Wi = ki+a_{i,0}*c_i mod q. Note that a_{i,0} is the secret.
     //
@@ -334,11 +340,19 @@ pub enum Round2Error {
     PeerFeldmanVerifyFailed(u32),
 }
 
-pub fn round_2<M: Math>(
-    participant: &R1ParticipantState<M>,
-    bcast: &HashMap<u32, Round1Bcast<M>>,
+pub fn round_2(
+    participant: &R1ParticipantState<Secp256k1Math>,
+    bcast: &HashMap<u32, Round1Bcast<Secp256k1Math>>,
     p2psend: &HashMap<u32, ShamirShare>,
-) -> Result<(R2ParticipantState<M>, Round2Bcast<M>), Round2Error> {
+) -> Result<
+    (
+        R2ParticipantState<Secp256k1Math>,
+        Round2Bcast<Secp256k1Math>,
+    ),
+    Round2Error,
+> {
+    eprintln!("round 2");
+
     // We should validate Wi and Ci values in Round1Bcats
     for (_id, bc) in bcast.iter() {
         if bc.ci.is_zero().into() {
@@ -372,28 +386,18 @@ pub fn round_2<M: Math>(
             "aj0 {} {} {}",
             participant.id,
             id,
-            hex::encode(aj0.to_bytes().as_ref())
+            hex::encode(aj0.to_bytes())
         );
 
         // Compute g^{w_j}
-        let prod1 = M::G::generator() * bc.wi;
+        let prod1 = k256::ProjectivePoint::GENERATOR * bc.wi;
 
         // Compute A_{j,0}^{-c_j}, and sum.
         let prod2 = *aj0 * -bc.ci; // checked nonzero
         let prod = prod1 + prod2;
 
-        // Now build commitment.
-        let mut buf = Vec::new();
-        buf.extend(u32::to_be_bytes(*id));
-        buf.extend(u64::to_be_bytes(participant.ctx.len() as u64));
-        buf.extend(&participant.ctx);
-        buf.extend(aj0.to_bytes().as_ref());
-        buf.push(0xff); // EXTRA
-        buf.extend(prod.to_bytes().as_ref());
-        eprintln!("round2 {} {} {}", participant.id, id, hex::encode(&buf));
-
-        // Figure out the hash-to-field thing.
-        let cj = hash::hash_to_field::<<M::G as Group>::Scalar>(&buf);
+        // Now compute commitment.
+        let cj = compute_nizk_hash(*id, &participant.ctx, aj0.to_affine(), prod.to_affine());
 
         // Check equation.
         if cj != bc.ci {
@@ -413,16 +417,20 @@ pub fn round_2<M: Math>(
     }
 
     // Take the bytes from the share and work backwards to get the scalar.
-    let sk_bytes = &participant.secret_shares[participant.id as usize - 1].value();
-    let sk_repr = M::scalar_repr_from_bytes(sk_bytes).ok_or(Round2Error::ShamirShareParseFail)?;
-    let sk_opt = <M::G as Group>::Scalar::from_repr(sk_repr);
+    let sk_bytes = participant.secret_shares[participant.id as usize - 1].value();
+    //    let sk_ga = sk_bytes
+    //      .try_into()
+    //    .map_err(|_| Round2Error::ShamirShareParseFail)?;
+    let sk_fb = k256::FieldBytes::from_slice(sk_bytes);
+    //    let sk_fb = k256::FieldBytes::try_from(sk_ga).map_err(|_| Round2Error::ShamirShareParseFail)?;
+    let sk_opt = k256::Scalar::from_repr(*sk_fb);
     let mut sk = if sk_opt.is_some().into() {
         sk_opt.unwrap()
     } else {
         return Err(Round2Error::ShamirShareParseFail);
     };
 
-    let mut vk: M::G = participant.verifier.commitments[0];
+    let mut vk = participant.verifier.commitments[0];
 
     // Step 6 - Compute signing key share ski = \sum_{j=1}^n xji
     for id in bcast.keys() {
@@ -431,9 +439,9 @@ pub fn round_2<M: Math>(
         }
 
         // Like above, work backwards from the share that was sent to get the scalar.
-        let t2_repr = M::scalar_repr_from_bytes(&p2psend[id].value())
-            .ok_or(Round2Error::P2PSendParseFail(*id))?;
-        let t2_opt = <M::G as Group>::Scalar::from_repr(t2_repr);
+        let t2_bytes = p2psend[id].value();
+        let t2_repr = k256::FieldBytes::from_slice(t2_bytes);
+        let t2_opt = k256::Scalar::from_repr(*t2_repr);
         let t2 = if t2_opt.is_some().into() {
             t2_opt.unwrap()
         } else {
@@ -452,7 +460,7 @@ pub fn round_2<M: Math>(
     }
 
     // Step 7 - Compute verification key share vki = ski*G and store.
-    let mut vk_share = M::G::generator() * sk;
+    let mut vk_share = k256::ProjectivePoint::GENERATOR * sk;
 
     // Step 7.5 - (FOR TAPROOT) If the y-coordinate of the point if negative,
     // flip all the shares.
@@ -483,4 +491,28 @@ pub fn round_2<M: Math>(
     let r2bc = Round2Bcast { vk, vk_share };
 
     Ok((r2ps, r2bc))
+}
+
+/// Used to compute the NIZK scalar value in steps 2 and 5 of round 1
+///
+/// (See FROST paper, page 12.)
+fn compute_nizk_hash(
+    part_id: u32,
+    ctx: &[u8],
+    gai0: k256::AffinePoint,
+    ri: k256::AffinePoint,
+) -> k256::Scalar {
+    // TODO don't put it into a buf, just write it directly into the digest.
+    let mut buf = Vec::new();
+    buf.extend(part_id.to_be_bytes());
+    buf.extend((ctx.len() as u64).to_be_bytes());
+    buf.extend(ctx);
+    buf.extend(gai0.to_bytes());
+    buf.push(0x00); // extra
+    buf.extend(ri.to_bytes());
+    eprintln!("commitment_hash {}   {}", part_id, hex::encode(&buf));
+
+    // Basically hash to field.
+    let h = Sha256::digest(&buf);
+    <k256::Scalar as Reduce<k256::U256>>::from_be_bytes_reduced(h)
 }

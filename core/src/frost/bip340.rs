@@ -56,3 +56,17 @@ pub fn lift_x(e: k256::U256) -> k256::AffinePoint {
     let sbuf = s.to_bytes();
     k256::AffinePoint::decompress(&sbuf, Choice::from(0)).unwrap()
 }
+
+pub fn fmt_point(e: &k256::AffinePoint) -> String {
+    let ep = e.to_encoded_point(true);
+    match ep.coordinates() {
+        Coordinates::Compressed { x, y_is_odd } => {
+            let eo = if y_is_odd { "odd" } else { "even" };
+            format!("[{}:{}]", eo, hex::encode(x))
+        }
+        Coordinates::Identity => {
+            format!("[identity]")
+        }
+        _ => panic!(".coordinates() did not return compressed instance"),
+    }
+}

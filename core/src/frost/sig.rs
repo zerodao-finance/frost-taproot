@@ -1,7 +1,6 @@
 use std::fmt;
 
-use digest::Digest;
-use ec::group::{Curve, Group, GroupEncoding, ScalarMul};
+use ec::group::{Group, GroupEncoding, ScalarMul};
 use ec::sec1::ToEncodedPoint;
 use elliptic_curve as ec;
 use ff::{Field, PrimeField};

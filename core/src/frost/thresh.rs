@@ -1,7 +1,6 @@
 use std::collections::*;
 use std::fmt;
 
-use digest::Digest;
 use elliptic_curve::sec1::Coordinates;
 use elliptic_curve::sec1::ToEncodedPoint;
 use elliptic_curve::subtle::ConditionallySelectable;
@@ -344,6 +343,9 @@ pub fn round_2(
         sum_r += rj;
     }
 
+    let r_fmt = bip340::fmt_point(&sum_r.to_affine());
+    eprintln!("sum_r: {}", r_fmt);
+
     // Normalize the point.  This math is a little screwy so make sure it's correct.
     // TODO TODO TODO
     if bip340::has_even_y(sum_r.to_affine()) {
@@ -471,7 +473,7 @@ pub fn round_3(
     let flip_parity = !bip340::has_even_y(r2is.sum_r.to_affine());
     for (id, data) in round3_input {
         let zj = data.zi;
-        let vkj = data.vki;
+        let vkj = data.vki; // FIXME do we just trust this as provided or should we remember their share?
 
         // Step 2: Verify zj*G = Rj + c*Lj*vkj
         // zj*G
@@ -495,6 +497,9 @@ pub fn round_3(
 
         // Check equation!
         if zjg != right {
+            let zjg_fmt = bip340::fmt_point(&zjg.to_affine());
+            let right_fmt = bip340::fmt_point(&right.to_affine());
+            eprintln!("zgj != right for {}: {} != {}", id, zjg_fmt, right_fmt);
             return Err(Round3Error::ParticipantEquivocate(*id));
         }
 
@@ -532,7 +537,7 @@ pub fn round_3(
         msg: signer_msg.to_vec(),
     };
 
-    let rbuf = r2is.sum_r.to_bytes().to_vec();
+    let rbuf = zg.to_bytes().to_vec();
     eprintln!("thresh r buf {}", hex::encode(rbuf));
 
     Ok((nsigner, r3bc))

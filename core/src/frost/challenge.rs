@@ -4,7 +4,7 @@ use elliptic_curve as ec;
 pub use ff::{Field, PrimeField};
 use rand::SeedableRng;
 
-use ec::group::{Curve, Group, GroupEncoding, ScalarMul};
+use ec::group::{Group, GroupEncoding, ScalarMul};
 use sha2::Sha256;
 
 use super::hash::*;
