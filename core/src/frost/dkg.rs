@@ -4,6 +4,7 @@ use digest::Digest;
 use ec::ops::Reduce;
 use elliptic_curve as ec;
 use ff::{Field, PrimeField};
+use group::Curve;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
@@ -13,6 +14,8 @@ use vsss_rs::Share as ShamirShare;
 use vsss_rs::{Feldman, FeldmanVerifier};
 
 use ec::group::{Group, GroupEncoding};
+
+use crate::frost::bip340;
 
 use super::serde::*;
 use super::{hash, math::*, sig};
@@ -218,7 +221,7 @@ pub fn round_1<R: RngCore + CryptoRng>(
     ),
     Round1Error,
 > {
-    eprintln!("round 2");
+    eprintln!("== round 2");
     // TODO should we check the number of participants?
 
     // There was some stuff here but due to Rust we don't need it.
@@ -315,22 +318,22 @@ impl<M: Math> Round2Bcast<M> {
 
 #[derive(Debug, Error)]
 pub enum Round2Error {
-    #[error("commitment is zero")]
-    CommitmentZero,
+    #[error("commitment is zero (from {0})")]
+    CommitmentZero(u32),
 
-    #[error("commitment is the identity element")]
-    CommitmentIdentity,
+    #[error("commitment is the identity element (from {0})")]
+    CommitmentIdentity(u32),
 
     #[error("commitment not on curve")]
     CommitmentNotOnCurve,
 
-    #[error("hash check failed with participant {0}")]
+    #[error("hash check failed (from {0})")]
     HashCheckFailed(u32),
 
     #[error("shamir share parse as scalar failed")]
     ShamirShareParseFail,
 
-    #[error("p2p send parse fail from participant {0}")]
+    #[error("p2p send parse fail (from {0})")]
     P2PSendParseFail(u32),
 
     #[error("p2psend table missing participent {0}")]
@@ -351,18 +354,18 @@ pub fn round_2(
     ),
     Round2Error,
 > {
-    eprintln!("round 2");
+    eprintln!("== round 2");
 
-    // We should validate Wi and Ci values in Round1Bcats
-    for (_id, bc) in bcast.iter() {
+    // We should validate Wi and Ci values in Round1Bcasts
+    for (id, bc) in bcast.iter() {
         if bc.ci.is_zero().into() {
-            return Err(Round2Error::CommitmentZero);
+            return Err(Round2Error::CommitmentZero(*id));
         }
 
         for com in &bc.verifiers.commitments {
             // TODO Add reporting for the indexes?
             if com.is_identity().into() {
-                return Err(Round2Error::CommitmentIdentity);
+                return Err(Round2Error::CommitmentIdentity(*id));
             }
         }
 
@@ -424,7 +427,7 @@ pub fn round_2(
     let sk_fb = k256::FieldBytes::from_slice(sk_bytes);
     //    let sk_fb = k256::FieldBytes::try_from(sk_ga).map_err(|_| Round2Error::ShamirShareParseFail)?;
     let sk_opt = k256::Scalar::from_repr(*sk_fb);
-    let mut sk = if sk_opt.is_some().into() {
+    let mut sk_share = if sk_opt.is_some().into() {
         sk_opt.unwrap()
     } else {
         return Err(Round2Error::ShamirShareParseFail);
@@ -447,7 +450,7 @@ pub fn round_2(
         } else {
             return Err(Round2Error::P2PSendParseFail(*id));
         };
-        sk += t2;
+        sk_share += t2;
     }
 
     // Step 8 - Compute verification key vk = sum(A_{j,0}), j = 1,...,n
@@ -456,24 +459,32 @@ pub fn round_2(
             continue;
         }
 
+        // This 0 here is correct, it's for the remote vk share commitment from
+        // the other party.
         vk += bc.verifiers.commitments[0];
     }
 
     // Step 7 - Compute verification key share vki = ski*G and store.
-    let mut vk_share = k256::ProjectivePoint::GENERATOR * sk;
+    let mut vk_share = k256::ProjectivePoint::GENERATOR * sk_share;
 
     // Step 7.5 - (FOR TAPROOT) If the y-coordinate of the point if negative,
     // flip all the shares.
     //
-    // FIXME This doesn't work.
-    //
-    // TODO Verify there's nothing else we should flip.
-    //if M::group_point_is_negative(vk) {
-    //    eprintln!("[!!!] inverting everything to make it a positive pk");
-    //    sk = -sk;
-    //    vk = -vk;
-    //    vk_share = -vk;
-    //}
+    // TODO Verify this is actually working correctly.
+    let mut nverif = participant.verifier.clone();
+    if !bip340::has_even_y(vk.to_affine()) {
+        eprintln!("[!!!] inverting everything to make it a xonly pk");
+        sk_share = -sk_share;
+        vk = -vk;
+        vk_share = -vk_share;
+
+        // Sanity check.
+        let nvksh = k256::ProjectivePoint::GENERATOR * sk_share;
+        assert_eq!(nvksh, vk_share);
+
+        // Also have to negate all the verifier commitments.
+        nverif.commitments.iter_mut().for_each(|vp| *vp = -(*vp));
+    }
 
     let r2ps = R2ParticipantState {
         id: participant.id,
@@ -481,9 +492,9 @@ pub fn round_2(
         other_participants: participant.other_participants.clone(),
         //other_participant_shares: participant.other_participant_shares.clone(),
         ctx: participant.ctx.clone(),
-        verifier: participant.verifier.clone(),
+        verifier: nverif,
         secret_shares: participant.secret_shares.clone(),
-        sk_share: sk,
+        sk_share,
         vk,
         vk_share,
     };
@@ -510,7 +521,7 @@ fn compute_nizk_hash(
     buf.extend(gai0.to_bytes());
     buf.push(0x00); // extra
     buf.extend(ri.to_bytes());
-    eprintln!("commitment_hash {}   {}", part_id, hex::encode(&buf));
+    //eprintln!("commitment_hash {}   {}", part_id, hex::encode(&buf));
 
     // Basically hash to field.
     let h = Sha256::digest(&buf);

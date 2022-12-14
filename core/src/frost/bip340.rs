@@ -70,3 +70,11 @@ pub fn fmt_point(e: &k256::AffinePoint) -> String {
         _ => panic!(".coordinates() did not return compressed instance"),
     }
 }
+
+/// Checks if the X-coordinates of points are equal, so we ignore the Y-coordinate.
+pub fn eq_ignore_parity(a: k256::AffinePoint, b: k256::AffinePoint) -> bool {
+    use elliptic_curve::AffineXCoordinate;
+    let ax = a.x();
+    let bx = b.x();
+    ax == bx
+}
