@@ -10,6 +10,7 @@ use crate::frost::sig::SchnorrPubkey;
 
 use super::sig::TaprootSignature;
 use super::{
+    bip340,
     challenge::{self, Bip340Chderiv, UniversalChderiv},
     dkg::{self, InitParticipantState},
     math::{self, Field, GroupEncoding, Math, PrimeField, Secp256k1Math},
@@ -131,12 +132,12 @@ fn do_secp256k1_thresh_sign_2of2(
     let s2_sig = s2r3_bc.to_sig();
     assert_eq!(s1_sig, s2_sig);
 
+    eprintln!("=== SIGN FINISHED");
     (p1.to_schnorr_pk(), s1_sig, s1r3_bc.to_taproot_sig())
 }
 
 /// This currently fails, we aren't currently compliant with BIP340 schnorr sigs right now.
-#[test]
-fn test_secp256k1_thresh_sign_2of2_works_bip340() {
+fn do_secp256k1_thresh_sign_2of2_works_bip340() {
     let msg = hex::decode(MSG_STR).expect("test: parse message");
     let msg_digest = Sha256::digest(&msg);
     let msg_hash = msg_digest.into();
@@ -149,6 +150,7 @@ fn test_secp256k1_thresh_sign_2of2_works_bip340() {
         &msg_hash,
         &taproot_sig
     ));
+    eprintln!("== GENERIC OK");
 
     let native_pk = math::Secp256k1Math::conv_pk(&generic_pk);
     let native_sig = math::Secp256k1Math::conv_tapsig(&taproot_sig);
@@ -160,9 +162,20 @@ fn test_secp256k1_thresh_sign_2of2_works_bip340() {
     if let Err(e) = native_bip_vk.verify_prehashed(&msg_hash, &native_sig) {
         panic!("sig failed to verify with k256 verifier: {}", e);
     }
+    eprintln!("== NATIVE OK");
 }
 
-use super::bip340;
+#[test]
+fn test_secp256k1_thresh_sign_2of2_works_bip340_once() {
+    do_secp256k1_thresh_sign_2of2_works_bip340();
+}
+
+#[test]
+fn test_secp256k1_thresh_sign_2of2_works_bip340_many() {
+    for _ in 0..500 {
+        do_secp256k1_thresh_sign_2of2_works_bip340();
+    }
+}
 
 #[test]
 fn test_secp256k1_simplesign_bip340() {
@@ -221,4 +234,44 @@ fn test_secp256k1_verify_taproot() {
         &msg_hash,
         &sig_generic
     ));
+}
+
+#[test]
+fn test_basic_math_because_idk() {
+    let mut rng = rand::rngs::OsRng;
+
+    let mut acc0 = k256::ProjectivePoint::GENERATOR;
+    let mut acc0norm = k256::ProjectivePoint::GENERATOR;
+
+    for _ in 0..20 {
+        let mut k = k256::Scalar::random(&mut rng);
+
+        let kg = k256::ProjectivePoint::GENERATOR * k;
+        let kg_even = bip340::has_even_y(kg.to_affine());
+        eprintln!("kg =  {}", bip340::fmt_point(&kg.to_affine()));
+
+        let pa0p = bip340::has_even_y(acc0.to_affine());
+        let pa0np = bip340::has_even_y(acc0norm.to_affine());
+
+        acc0 += kg;
+        if kg_even {
+            acc0norm += kg;
+        } else {
+            acc0norm += -kg;
+        }
+
+        eprintln!(
+            "a0 =  {}\na0n=  {}",
+            bip340::fmt_point(&acc0.to_affine()),
+            bip340::fmt_point(&acc0norm.to_affine()),
+        );
+
+        let na0p = bip340::has_even_y(acc0.to_affine());
+        let na0np = bip340::has_even_y(acc0norm.to_affine());
+
+        eprintln!(
+            "{}.{}={} {}.{}={}\n-----",
+            pa0p, kg_even, na0p, pa0np, true, na0np
+        );
+    }
 }

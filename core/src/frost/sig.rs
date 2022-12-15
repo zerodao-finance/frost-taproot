@@ -202,7 +202,21 @@ pub fn verify_secp256k1_taproot(
     let e = Bip340Chderiv.derive_challenge(msg_hash, pk.y, sig.r);
 
     // r_v = sG + eP
-    let r_v = (k256::ProjectivePoint::GENERATOR * sig.s) - (pk.y * e);
+    let sg = k256::ProjectivePoint::GENERATOR * sig.s;
+    let ey = pk.y * e;
+    let r_v = sg - ey;
+
+    eprintln!(
+        "gnrc g^s={} s={}",
+        hex::encode(sg.to_encoded_point(true)),
+        hex::encode(sig.s.to_bytes())
+    );
+
+    eprintln!(
+        "gnrc r ={}\ngnrc rv={}",
+        hex::encode(sig.r.to_encoded_point(true)),
+        hex::encode(r_v.to_encoded_point(true))
+    );
 
     // assert xs are equal
     let (sigx, _) = bip340::get_xy_coords(sig.r.to_affine());

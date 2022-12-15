@@ -1,6 +1,8 @@
 use std::collections::*;
 use std::fmt;
 
+use digest::Digest;
+use elliptic_curve::ops::Reduce;
 use elliptic_curve::sec1::Coordinates;
 use elliptic_curve::sec1::ToEncodedPoint;
 use elliptic_curve::subtle::ConditionallySelectable;
@@ -159,26 +161,26 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct R1InnerState<M: Math> {
     #[serde_as(as = "Marshal<PointSerde<M>>")]
-    cap_d: M::G,
+    cap_di: M::G,
 
     #[serde_as(as = "Marshal<PointSerde<M>>")]
-    cap_e: M::G,
+    cap_ei: M::G,
 
     #[serde_as(as = "Marshal<ScalarSerde<M>>")]
-    small_d: <M::G as Group>::Scalar,
+    small_di: <M::G as Group>::Scalar,
 
     #[serde_as(as = "Marshal<ScalarSerde<M>>")]
-    small_e: <M::G as Group>::Scalar,
+    small_ei: <M::G as Group>::Scalar,
 }
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round1Bcast<M: Math> {
     #[serde_as(as = "Marshal<PointSerde<M>>")]
-    pub di: M::G,
+    pub cap_di: M::G,
 
     #[serde_as(as = "Marshal<PointSerde<M>>")]
-    pub ei: M::G,
+    pub cap_ei: M::G,
 }
 
 #[derive(Debug, Error)]
@@ -202,6 +204,8 @@ pub fn round_1(
     ),
     Round1Error,
 > {
+    eprintln!("== round 1");
+
     if signer.state.legacy_round() != 1 {
         return Err(Round1Error::WrongRound(signer.state.legacy_round()));
     }
@@ -211,22 +215,19 @@ pub fn round_1(
     let ei = k256::Scalar::random(&mut rng);
 
     // Step 2 - Compute Di, Ei
-    let big_di = k256::ProjectivePoint::GENERATOR * di;
-    let big_ei = k256::ProjectivePoint::GENERATOR * ei;
+    let cap_di = k256::ProjectivePoint::GENERATOR * di;
+    let cap_ei = k256::ProjectivePoint::GENERATOR * ei;
 
     // Store di, ei, Di, Ei locally and broadcast Di, Ei
     let mut nsigner = signer.clone();
     nsigner.state = Inner::R1(R1InnerState {
-        cap_d: big_di,
-        cap_e: big_ei,
-        small_d: di,
-        small_e: ei,
+        cap_di,
+        cap_ei,
+        small_di: di,
+        small_ei: ei,
     });
 
-    let r1bc = Round1Bcast {
-        di: big_di,
-        ei: big_ei,
-    };
+    let r1bc = Round1Bcast { cap_di, cap_ei };
 
     Ok((nsigner, r1bc))
 }
@@ -237,10 +238,10 @@ pub struct R2InnerState<M: Math> {
     // Copied from round 1.
     // No small_d or small_e since they're one-time use.
     #[serde_as(as = "Marshal<PointSerde<M>>")]
-    cap_d: M::G,
+    cap_di: M::G,
 
     #[serde_as(as = "Marshal<PointSerde<M>>")]
-    cap_e: M::G,
+    cap_ei: M::G,
 
     // Round 2.
     commitments: HashMap<u32, Round1Bcast<M>>,
@@ -293,6 +294,8 @@ pub fn round_2(
     ),
     Round2Error,
 > {
+    eprintln!("== round 2");
+
     let r1is = match &signer.state {
         Inner::R1(r1is) => r1is,
         _ => return Err(Round2Error::WrongRound(signer.state.legacy_round())),
@@ -318,8 +321,11 @@ pub fn round_2(
     // deferred: signer.state.commitments = Some(round2_input);
 
     // Step 3-6 (all of these r values are rhos in the paper)
-    let mut sum_r = k256::ProjectivePoint::IDENTITY;
-    let mut ri = k256::Scalar::ZERO; // gets overwritten
+    let mut sum_cap_r = k256::ProjectivePoint::IDENTITY;
+    let mut sum_cap_rp = k256::ProjectivePoint::IDENTITY;
+    let mut sum_cap_rstar = k256::ProjectivePoint::IDENTITY;
+    let mut rho_i = k256::Scalar::ZERO; // gets overwritten
+    let mut flipped = false;
     let mut rs = HashMap::<u32, WrappedPoint<Secp256k1Math>>::new();
     for (id, data) in round2_input {
         // Construct the binding balue commitment: (j, m, {Dj, Ej})
@@ -328,59 +334,91 @@ pub fn round_2(
         // Step 4 - rj = H(j,m,{Dj,Ej}_{j in [1...t]})
         // TODO We could make this operation faster by being sloppy with it, it
         // wouldn't reduce security afaik.
-        let rj = hash_to_field::<k256::Scalar>(&blob);
-        if signer.id == *id {
-            // DOES THIS EVER GET INVOKED???
-            ri = rj;
+        let bh = Sha256::digest(blob);
+        let mut rho_j = <k256::Scalar as Reduce<k256::U256>>::from_be_bytes_reduced(bh);
+
+        // Step 5 - R_j = D_j + r_j*E_j
+        let mut cap_r_j = data.cap_di + (data.cap_ei * rho_j);
+        let mut cap_rp_j = (-data.cap_di) + (data.cap_ei * -rho_j);
+
+        eprintln!(
+            "(j={})\n\tR_j = {}\n\tR'_j = {}\n\tD_j = {}\n\tE_j = {}",
+            id,
+            bip340::fmt_point(&cap_r_j.to_affine()),
+            bip340::fmt_point(&cap_rp_j.to_affine()),
+            bip340::fmt_point(&data.cap_di.to_affine()),
+            bip340::fmt_point(&data.cap_ei.to_affine())
+        );
+
+        // Flip things if necessary.
+        let even = !bip340::has_even_y(cap_r_j.to_affine());
+        if !even {
+            //rho_j = -rho_j;
+            //cap_r_j = -cap_r_j;
         }
 
-        // Step 5 - R_j = D_j + r_j*E_j (now this is the big R)
-        let rj_ej = data.ei * rj;
-        let rj = rj_ej + data.di;
-        rs.insert(*id, WrappedPoint(rj));
+        rs.insert(*id, WrappedPoint(cap_r_j));
+
+        if signer.id == *id {
+            rho_i = rho_j;
+            //flipped = needs_flip;
+        }
 
         // Step 6 - R = R+Rj
-        sum_r += rj;
+        sum_cap_r += cap_r_j;
+        sum_cap_rp += cap_rp_j;
+
+        if even {
+            sum_cap_rstar += sum_cap_r;
+        } else {
+            sum_cap_rstar += sum_cap_rp;
+        }
     }
 
-    let r_fmt = bip340::fmt_point(&sum_r.to_affine());
-    eprintln!("sum_r: {}", r_fmt);
+    eprintln!("sum R = {}", bip340::fmt_point(&sum_cap_r.to_affine()));
 
     // Normalize the point.  This math is a little screwy so make sure it's correct.
     // TODO TODO TODO
-    if bip340::has_even_y(sum_r.to_affine()) {
+    if !bip340::has_even_y(sum_cap_r.to_affine()) {
         // Figuring out if it's negative or not is hard.  But once we know, flipping it is easy.
-        sum_r = -sum_r;
+        sum_cap_r = -sum_cap_r;
     }
 
     // Step 7 - c = H(m, R)
     let c = signer
         .challenge_deriver
-        .derive_challenge(&msg_hash, signer.vk, sum_r);
+        .derive_challenge(&msg_hash, signer.vk, sum_cap_r);
 
     // Step 9 - zi = di + (ei * ri) + (Li * ski * c)
     let li = signer.lcoeffs[&signer.id].0;
-    let liski = li * signer.sk_share;
-    let liskic = liski * c;
+    let mut z_i = r1is.small_di + (r1is.small_ei * rho_i) + (li * signer.sk_share * c);
+    let gzi = k256::ProjectivePoint::GENERATOR * z_i;
 
-    let eiri = r1is.small_e * ri;
+    eprintln!(
+        "vk_i = {}, g^z_i = {}, z_i = {}",
+        bip340::fmt_point(&signer.vk_share.to_affine()),
+        bip340::fmt_point(&gzi.to_affine()),
+        hex::encode(z_i.to_bytes())
+    );
 
-    // Compute zi = di + (ei * ri) + (Li * ski * c)
-    let zi = liskic + eiri + r1is.small_d;
+    // If we flipped our cap_r then we flip our z too.
+    if flipped {
+        //zi = -zi;
+    }
 
     // Step 8 - Record c, R, Rjs
     nsigner.state = Inner::R2(R2InnerState {
-        cap_d: r1is.cap_d,
-        cap_e: r1is.cap_d,
+        cap_di: r1is.cap_di,
+        cap_ei: r1is.cap_di,
         commitments: round2_input.clone(),
         msg_digest: *msg_hash,
         c,
         cap_rs: rs,
-        sum_r,
+        sum_r: sum_cap_r,
     });
 
     let r2bc = Round2Bcast {
-        zi,
+        zi: z_i,
         vki: signer.vk_share,
     };
 
@@ -391,19 +429,16 @@ pub fn round_2(
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Round3Bcast<M: Math> {
     #[serde_as(as = "Marshal<PointSerde<M>>")]
-    pub rho: M::G,
+    pub cap_r: M::G,
 
     #[serde_as(as = "Marshal<PointSerde<M>>")]
-    pub r: M::G,
+    pub zg: M::G,
 
     #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     pub z: <M::G as Group>::Scalar,
 
     #[serde_as(as = "Marshal<ScalarSerde<M>>")]
     pub c: <M::G as Group>::Scalar,
-
-    #[serde(with = "hex")]
-    pub msg: Vec<u8>,
 }
 
 impl<M: Math> Round3Bcast<M> {
@@ -416,7 +451,7 @@ impl<M: Math> Round3Bcast<M> {
 
     pub fn to_taproot_sig(&self) -> TaprootSignature<M> {
         TaprootSignature {
-            r: self.r,
+            r: self.cap_r,
             s: self.z,
         }
     }
@@ -450,6 +485,8 @@ pub fn round_3(
     ),
     Round3Error,
 > {
+    eprintln!("== round 3");
+
     let r2is = match &signer.state {
         Inner::R2(r2is) => r2is,
         _ => return Err(Round3Error::WrongRound(signer.state.legacy_round())),
@@ -469,15 +506,22 @@ pub fn round_3(
 
     // Step 1-3
     // Step 1: For j in [1...t]
+    let mut inputs = round3_input.into_iter().collect::<Vec<_>>();
+    inputs.sort_by_key(|(k, _)| *k);
+
     let mut z = k256::Scalar::zero();
     let flip_parity = !bip340::has_even_y(r2is.sum_r.to_affine());
-    for (id, data) in round3_input {
+    for (id, data) in inputs {
         let zj = data.zi;
         let vkj = data.vki; // FIXME do we just trust this as provided or should we remember their share?
 
         // Step 2: Verify zj*G = Rj + c*Lj*vkj
         // zj*G
         let zjg = k256::ProjectivePoint::GENERATOR * zj;
+
+        if !bip340::has_even_y(zjg.to_affine()) {
+            // TODO reject as not allowed?
+        }
 
         // c*Lj
         let clj = signer_c * signer.lcoeffs[id].0;
@@ -490,51 +534,78 @@ pub fn round_3(
 
         // see above
         if flip_parity {
-            rj = k256::ProjectivePoint::from(bip340::flip(rj.to_affine()));
+            rj = -rj;
         }
 
         let right = cljvkj + rj;
 
+        eprintln!(
+            "from {} for {} zgj {}",
+            signer.id,
+            id,
+            bip340::fmt_point(&zjg.to_affine())
+        );
+        eprintln!(
+            "from {} for {} rt  {}",
+            signer.id,
+            id,
+            bip340::fmt_point(&right.to_affine())
+        );
+        eprintln!(
+            "from {} for {} -rt {}",
+            signer.id,
+            id,
+            bip340::fmt_point(&(-right).to_affine())
+        );
+
         // Check equation!
         if zjg != right {
-            let zjg_fmt = bip340::fmt_point(&zjg.to_affine());
-            let right_fmt = bip340::fmt_point(&right.to_affine());
-            eprintln!("zgj != right for {}: {} != {}", id, zjg_fmt, right_fmt);
             return Err(Round3Error::ParticipantEquivocate(*id));
         }
 
         z += zj;
     }
 
+    // Now go see if we have to flip the parity.
+    let tmp_e = signer
+        .challenge_deriver
+        .derive_challenge(&signer_msg, signer.vk, r2is.sum_r);
+    let tmp_r = (k256::ProjectivePoint::GENERATOR * z) + (signer.vk * tmp_e);
+
+    // We have to flip the s value if the tmp_r is negative because of reasons.
+    if !bip340::has_even_y(tmp_r.to_affine()) {
+        z = -z;
+    }
+
     // Step 4 - 7: Self verify the signature (z, c)
-    let zg = k256::ProjectivePoint::GENERATOR * z; // r
-    let cvk = signer.vk * signer_c; // additive not multiplicative!
-    let tmp_r = zg - cvk;
+    let zg = k256::ProjectivePoint::GENERATOR * z;
+
+    /*let cvk = signer.vk * signer_c; // additive not multiplicative!
+    let tmp_r = zg - cvk;*/
 
     // Step 6 - c' = H(m, R')
-    let tmp_c = signer
-        .challenge_deriver
-        .derive_challenge(&signer_msg, signer.vk, tmp_r);
+    /*let tmp_c = signer
+    .challenge_deriver
+    .derive_challenge(&signer_msg, signer.vk, tmp_r);*/
 
     // Step 7 - Check c = c'
-    if tmp_c != signer_c {
+    /*if tmp_c != signer_c {
         eprintln!(
             "tmp {}\nsig {}",
             hex::encode(tmp_c.to_repr()),
             hex::encode(signer_c.to_repr())
         );
         return Err(Round3Error::InvalidSignature);
-    }
+    }*/
 
     // Update round number
     nsigner.state = Inner::Final;
 
     let r3bc = Round3Bcast {
-        rho: r2is.sum_r,
-        r: zg,
+        cap_r: r2is.sum_r,
+        zg,
         z,
         c: signer_c,
-        msg: signer_msg.to_vec(),
     };
 
     let rbuf = zg.to_bytes().to_vec();
@@ -558,8 +629,8 @@ fn concat_hash_array<M: Math>(
         buf.extend(u32::to_be_bytes(*cosig_id));
         let r1b = &r2i[cosig_id];
 
-        let bigdi_bytes = r1b.di.to_bytes(); // `.to_affine()`?
-        let bigei_bytes = r1b.ei.to_bytes(); // `.to_affine()`?
+        let bigdi_bytes = r1b.cap_di.to_bytes(); // `.to_affine()`?
+        let bigei_bytes = r1b.cap_ei.to_bytes(); // `.to_affine()`?
         buf.extend(bigdi_bytes.as_ref());
         buf.extend(bigei_bytes.as_ref());
     }

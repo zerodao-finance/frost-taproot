@@ -50,6 +50,8 @@ impl ChallengeDeriver<Secp256k1Math> for Bip340Chderiv {
         let native_vk =
             k256::schnorr::VerifyingKey::try_from(native_pk).expect("chderiv: pk not xonly");
 
+        // TODO We might want to consider tweaking this so that we fail properly
+        // if the r is incorrect.
         let r_aff: k256::AffinePoint = r.to_affine();
         use elliptic_curve::AffineXCoordinate;
         let rx = r_aff.x();

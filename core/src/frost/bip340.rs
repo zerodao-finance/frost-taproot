@@ -61,7 +61,7 @@ pub fn fmt_point(e: &k256::AffinePoint) -> String {
     let ep = e.to_encoded_point(true);
     match ep.coordinates() {
         Coordinates::Compressed { x, y_is_odd } => {
-            let eo = if y_is_odd { "odd" } else { "even" };
+            let eo = if y_is_odd { "odd" } else { "evn" };
             format!("[{}:{}]", eo, hex::encode(x))
         }
         Coordinates::Identity => {
