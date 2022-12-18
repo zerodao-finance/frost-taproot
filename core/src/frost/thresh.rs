@@ -322,8 +322,6 @@ pub fn round_2(
 
     // Step 3-6 (all of these r values are rhos in the paper)
     let mut sum_cap_r = k256::ProjectivePoint::IDENTITY;
-    let mut sum_cap_rp = k256::ProjectivePoint::IDENTITY;
-    let mut sum_cap_rstar = k256::ProjectivePoint::IDENTITY;
     let mut rho_i = k256::Scalar::ZERO; // gets overwritten
     let mut flipped = false;
     let mut rs = HashMap::<u32, WrappedPoint<Secp256k1Math>>::new();
@@ -339,49 +337,45 @@ pub fn round_2(
 
         // Step 5 - R_j = D_j + r_j*E_j
         let mut cap_r_j = data.cap_di + (data.cap_ei * rho_j);
-        let mut cap_rp_j = (-data.cap_di) + (data.cap_ei * -rho_j);
 
         eprintln!(
-            "(j={})\n\tR_j = {}\n\tR'_j = {}\n\tD_j = {}\n\tE_j = {}",
+            "(j={})\n\tR_j = {}\n\tD_j = {}\n\tE_j = {}",
             id,
             bip340::fmt_point(&cap_r_j.to_affine()),
-            bip340::fmt_point(&cap_rp_j.to_affine()),
             bip340::fmt_point(&data.cap_di.to_affine()),
             bip340::fmt_point(&data.cap_ei.to_affine())
         );
-
-        // Flip things if necessary.
-        let even = !bip340::has_even_y(cap_r_j.to_affine());
-        if !even {
-            //rho_j = -rho_j;
-            //cap_r_j = -cap_r_j;
-        }
 
         rs.insert(*id, WrappedPoint(cap_r_j));
 
         if signer.id == *id {
             rho_i = rho_j;
-            //flipped = needs_flip;
         }
 
         // Step 6 - R = R+Rj
         sum_cap_r += cap_r_j;
-        sum_cap_rp += cap_rp_j;
-
-        if even {
-            sum_cap_rstar += sum_cap_r;
-        } else {
-            sum_cap_rstar += sum_cap_rp;
-        }
     }
 
     eprintln!("sum R = {}", bip340::fmt_point(&sum_cap_r.to_affine()));
 
-    // Normalize the point.  This math is a little screwy so make sure it's correct.
-    // TODO TODO TODO
-    if !bip340::has_even_y(sum_cap_r.to_affine()) {
-        // Figuring out if it's negative or not is hard.  But once we know, flipping it is easy.
+    // Step 9 - zi = di + (ei * ri) + (Li * ski * c)
+    let mut eff_small_di = r1is.small_di;
+    let mut eff_small_ei = r1is.small_ei;
+
+    // Do some normalization because all of our points have to have even parity.
+    // This means flipping the e_i and d_i values in the paper and all the R
+    // values (both for the full set and per-party).
+    let is_sum_r_even = bip340::has_even_y(sum_cap_r.to_affine());
+    if !is_sum_r_even {
+        // This is the obvious one, we can't have an odd parity R.
         sum_cap_r = -sum_cap_r;
+
+        // Have to negate the values of this nonce pair, thanks jesseposner!
+        eff_small_di = -eff_small_di;
+        eff_small_ei = -eff_small_ei;
+
+        // (... so we also have to negate all the peer Rjs)
+        rs.values_mut().for_each(|e| e.0 = -e.0);
     }
 
     // Step 7 - c = H(m, R)
@@ -389,9 +383,8 @@ pub fn round_2(
         .challenge_deriver
         .derive_challenge(&msg_hash, signer.vk, sum_cap_r);
 
-    // Step 9 - zi = di + (ei * ri) + (Li * ski * c)
     let li = signer.lcoeffs[&signer.id].0;
-    let mut z_i = r1is.small_di + (r1is.small_ei * rho_i) + (li * signer.sk_share * c);
+    let mut z_i = eff_small_di + (eff_small_ei * rho_i) + (li * signer.sk_share * c);
     let gzi = k256::ProjectivePoint::GENERATOR * z_i;
 
     eprintln!(
@@ -400,11 +393,6 @@ pub fn round_2(
         bip340::fmt_point(&gzi.to_affine()),
         hex::encode(z_i.to_bytes())
     );
-
-    // If we flipped our cap_r then we flip our z too.
-    if flipped {
-        //zi = -zi;
-    }
 
     // Step 8 - Record c, R, Rjs
     nsigner.state = Inner::R2(R2InnerState {
@@ -519,10 +507,6 @@ pub fn round_3(
         // zj*G
         let zjg = k256::ProjectivePoint::GENERATOR * zj;
 
-        if !bip340::has_even_y(zjg.to_affine()) {
-            // TODO reject as not allowed?
-        }
-
         // c*Lj
         let clj = signer_c * signer.lcoeffs[id].0;
 
@@ -572,31 +556,26 @@ pub fn round_3(
         .derive_challenge(&signer_msg, signer.vk, r2is.sum_r);
     let tmp_r = (k256::ProjectivePoint::GENERATOR * z) + (signer.vk * tmp_e);
 
-    // We have to flip the s value if the tmp_r is negative because of reasons.
-    if !bip340::has_even_y(tmp_r.to_affine()) {
-        z = -z;
-    }
-
     // Step 4 - 7: Self verify the signature (z, c)
     let zg = k256::ProjectivePoint::GENERATOR * z;
 
-    /*let cvk = signer.vk * signer_c; // additive not multiplicative!
-    let tmp_r = zg - cvk;*/
+    let cvk = signer.vk * signer_c; // additive not multiplicative!
+    let tmp_r = zg - cvk;
 
     // Step 6 - c' = H(m, R')
-    /*let tmp_c = signer
-    .challenge_deriver
-    .derive_challenge(&signer_msg, signer.vk, tmp_r);*/
+    let tmp_c = signer
+        .challenge_deriver
+        .derive_challenge(&signer_msg, signer.vk, tmp_r);
 
     // Step 7 - Check c = c'
-    /*if tmp_c != signer_c {
+    if tmp_c != signer_c {
         eprintln!(
             "tmp {}\nsig {}",
             hex::encode(tmp_c.to_repr()),
             hex::encode(signer_c.to_repr())
         );
         return Err(Round3Error::InvalidSignature);
-    }*/
+    }
 
     // Update round number
     nsigner.state = Inner::Final;

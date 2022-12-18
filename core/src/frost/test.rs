@@ -236,6 +236,7 @@ fn test_secp256k1_verify_taproot() {
     ));
 }
 
+#[ignore]
 #[test]
 fn test_basic_math_because_idk() {
     let mut rng = rand::rngs::OsRng;
