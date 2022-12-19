@@ -20,6 +20,14 @@ use crate::frost::bip340;
 use super::serde::*;
 use super::{hash, math::*, sig};
 
+/// The Shamir crate we use is hardcoded to only support 1 byte index tags in
+/// shares, and index 0 is an invalid index because of the way the math works.
+///
+/// So we set a max of 254, just to be safe.  In practice, this probably won't
+/// be used by more than 200, and we'll know well ahead of time if we do try to
+/// use it with enough to be an issue.
+pub const MAX_PARTICIPANTS: u8 = 254;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("no other participants specified")]
@@ -27,6 +35,9 @@ pub enum Error {
 
     #[error("participant id cannot be zero")]
     ZeroParticipantId,
+
+    #[error("too many participants: {0}")]
+    TooManyParticipants(usize),
 
     #[error("unimplemented")]
     Unimplemented,
@@ -153,26 +164,19 @@ impl<M: Math> InitParticipantState<M> {
 
         let limit = other_participants.len() + 1;
 
+        if limit > MAX_PARTICIPANTS as usize {
+            return Err(Error::TooManyParticipants(limit));
+        }
+
         let feldman = vsss_rs::Feldman {
             n: limit,
             t: thresh as usize,
         };
 
-        /*let mut other_participant_shares = HashMap::new();
-        for opid in other_participants {
-            let pd: ParticipantData<M> = ParticipantData {
-                share: None,
-                verifiers: None,
-            };
-
-            other_participant_shares.insert(opid, pd);
-        }*/
-
         Ok(InitParticipantState {
             id,
             feldman,
             other_participants,
-            //other_participant_shares,
             ctx,
             _pd: ::std::marker::PhantomData,
         })
@@ -227,6 +231,8 @@ pub fn round_1<R: RngCore + CryptoRng>(
     // There was some stuff here but due to Rust we don't need it.
     let s = secret;
     let sg = k256::ProjectivePoint::GENERATOR * s;
+
+    #[cfg(feature = "debug_eprintlns")]
     eprintln!(
         "secret {} {:?} {}",
         participant.id,
@@ -282,7 +288,10 @@ pub fn round_1<R: RngCore + CryptoRng>(
     let mut p2p_send = HashMap::new();
     for oid in &participant.other_participants {
         let share = shares[*oid as usize - 1].clone();
+
+        #[cfg(feature = "debug_eprintlns")]
         eprintln!("share {} -> {}: {:?}", participant.id, oid, share);
+
         p2p_send.insert(*oid, share);
     }
 
@@ -291,7 +300,6 @@ pub fn round_1<R: RngCore + CryptoRng>(
         id: participant.id,
         feldman: participant.feldman,
         other_participants: participant.other_participants.clone(),
-        //other_participant_shares: participant.other_participant_shares.clone(),
         ctx: participant.ctx.clone(),
         verifier,
         secret_shares: shares,
@@ -385,6 +393,8 @@ pub fn round_2(
         // Step 4 - Check equation c_j = H(j, CTX, A_{j,0}, g^{w_j}*A_{j,0}^{-c_j}
         // Get Aj0
         let aj0 = &bc.verifiers.commitments[0];
+
+        #[cfg(feature = "debug_eprintlns")]
         eprintln!(
             "aj0 {} {} {}",
             participant.id,
@@ -421,11 +431,7 @@ pub fn round_2(
 
     // Take the bytes from the share and work backwards to get the scalar.
     let sk_bytes = participant.secret_shares[participant.id as usize - 1].value();
-    //    let sk_ga = sk_bytes
-    //      .try_into()
-    //    .map_err(|_| Round2Error::ShamirShareParseFail)?;
     let sk_fb = k256::FieldBytes::from_slice(sk_bytes);
-    //    let sk_fb = k256::FieldBytes::try_from(sk_ga).map_err(|_| Round2Error::ShamirShareParseFail)?;
     let sk_opt = k256::Scalar::from_repr(*sk_fb);
     let mut sk_share = if sk_opt.is_some().into() {
         sk_opt.unwrap()
@@ -473,14 +479,19 @@ pub fn round_2(
     // TODO Verify this is actually working correctly.
     let mut nverif = participant.verifier.clone();
     if !bip340::has_even_y(vk.to_affine()) {
+        #[cfg(feature = "debug_eprintlns")]
         eprintln!("[!!!] inverting everything to make it a xonly pk");
+
         sk_share = -sk_share;
         vk = -vk;
         vk_share = -vk_share;
 
         // Sanity check.
-        let nvksh = k256::ProjectivePoint::GENERATOR * sk_share;
-        assert_eq!(nvksh, vk_share);
+        #[cfg(debug_assertions)]
+        {
+            let nvksh = k256::ProjectivePoint::GENERATOR * sk_share;
+            assert_eq!(nvksh, vk_share);
+        }
 
         // Also have to negate all the verifier commitments.
         nverif.commitments.iter_mut().for_each(|vp| *vp = -(*vp));
@@ -490,7 +501,6 @@ pub fn round_2(
         id: participant.id,
         feldman: participant.feldman,
         other_participants: participant.other_participants.clone(),
-        //other_participant_shares: participant.other_participant_shares.clone(),
         ctx: participant.ctx.clone(),
         verifier: nverif,
         secret_shares: participant.secret_shares.clone(),
@@ -521,7 +531,6 @@ fn compute_nizk_hash(
     buf.extend(gai0.to_bytes());
     buf.push(0x00); // extra
     buf.extend(ri.to_bytes());
-    //eprintln!("commitment_hash {}   {}", part_id, hex::encode(&buf));
 
     // Basically hash to field.
     let h = Sha256::digest(&buf);

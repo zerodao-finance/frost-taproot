@@ -60,6 +60,8 @@ impl ChallengeDeriver<Secp256k1Math> for Bip340Chderiv {
         buf.extend(rx);
         buf.extend(native_vk.to_bytes());
         buf.extend(msg_digest);
+
+        #[cfg(feature = "debug_eprintlns")]
         eprintln!("chderiv sign preimag {}", hex::encode(&buf));
 
         // basically copied from the k256 code

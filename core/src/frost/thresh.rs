@@ -204,6 +204,7 @@ pub fn round_1(
     ),
     Round1Error,
 > {
+    #[cfg(feature = "debug_eprintlns")]
     eprintln!("== round 1");
 
     if signer.state.legacy_round() != 1 {
@@ -294,6 +295,7 @@ pub fn round_2(
     ),
     Round2Error,
 > {
+    #[cfg(feature = "debug_eprintlns")]
     eprintln!("== round 2");
 
     let r1is = match &signer.state {
@@ -338,6 +340,7 @@ pub fn round_2(
         // Step 5 - R_j = D_j + r_j*E_j
         let mut cap_r_j = data.cap_di + (data.cap_ei * rho_j);
 
+        #[cfg(feature = "debug_eprintlns")]
         eprintln!(
             "(j={})\n\tR_j = {}\n\tD_j = {}\n\tE_j = {}",
             id,
@@ -356,6 +359,7 @@ pub fn round_2(
         sum_cap_r += cap_r_j;
     }
 
+    #[cfg(feature = "debug_eprintlns")]
     eprintln!("sum R = {}", bip340::fmt_point(&sum_cap_r.to_affine()));
 
     // Step 9 - zi = di + (ei * ri) + (Li * ski * c)
@@ -387,6 +391,7 @@ pub fn round_2(
     let mut z_i = eff_small_di + (eff_small_ei * rho_i) + (li * signer.sk_share * c);
     let gzi = k256::ProjectivePoint::GENERATOR * z_i;
 
+    #[cfg(feature = "debug_eprintlns")]
     eprintln!(
         "vk_i = {}, g^z_i = {}, z_i = {}",
         bip340::fmt_point(&signer.vk_share.to_affine()),
@@ -473,6 +478,7 @@ pub fn round_3(
     ),
     Round3Error,
 > {
+    #[cfg(feature = "debug_eprintlns")]
     eprintln!("== round 3");
 
     let r2is = match &signer.state {
@@ -523,24 +529,27 @@ pub fn round_3(
 
         let right = cljvkj + rj;
 
-        eprintln!(
-            "from {} for {} zgj {}",
-            signer.id,
-            id,
-            bip340::fmt_point(&zjg.to_affine())
-        );
-        eprintln!(
-            "from {} for {} rt  {}",
-            signer.id,
-            id,
-            bip340::fmt_point(&right.to_affine())
-        );
-        eprintln!(
-            "from {} for {} -rt {}",
-            signer.id,
-            id,
-            bip340::fmt_point(&(-right).to_affine())
-        );
+        #[cfg(feature = "debug_eprintlns")]
+        {
+            eprintln!(
+                "from {} for {} zgj {}",
+                signer.id,
+                id,
+                bip340::fmt_point(&zjg.to_affine())
+            );
+            eprintln!(
+                "from {} for {} rt  {}",
+                signer.id,
+                id,
+                bip340::fmt_point(&right.to_affine())
+            );
+            eprintln!(
+                "from {} for {} -rt {}",
+                signer.id,
+                id,
+                bip340::fmt_point(&(-right).to_affine())
+            );
+        }
 
         // Check equation!
         if zjg != right {
@@ -569,6 +578,7 @@ pub fn round_3(
 
     // Step 7 - Check c = c'
     if tmp_c != signer_c {
+        #[cfg(feature = "debug_eprintlns")]
         eprintln!(
             "tmp {}\nsig {}",
             hex::encode(tmp_c.to_repr()),
@@ -588,6 +598,7 @@ pub fn round_3(
     };
 
     let rbuf = zg.to_bytes().to_vec();
+    #[cfg(feature = "debug_eprintlns")]
     eprintln!("thresh r buf {}", hex::encode(rbuf));
 
     Ok((nsigner, r3bc))
