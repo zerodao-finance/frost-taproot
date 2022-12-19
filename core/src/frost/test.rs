@@ -4,6 +4,7 @@ use digest::Digest;
 use k256::schnorr::signature::hazmat::PrehashVerifier;
 use k256::schnorr::signature::{DigestSigner, DigestVerifier, PrehashSignature};
 use k256::Secp256k1;
+use rand::seq::SliceRandom;
 use sha2::Sha256;
 
 use crate::frost::sig::SchnorrPubkey;
@@ -210,7 +211,7 @@ fn test_secp256k1_simplesign_bip340() {
 
 /// Checks that we verify a signature generates from the k256 crate correctly.
 #[test]
-fn test_secp256k1_verify_taproot() {
+fn test_secp256k1_verify_bip340() {
     let msg = hex::decode(MSG_STR).expect("test: parse message");
     let msg_pfx = Sha256::new_with_prefix(&msg);
     let msg_digest = Sha256::digest(&msg);
@@ -236,43 +237,213 @@ fn test_secp256k1_verify_taproot() {
     ));
 }
 
-#[ignore]
-#[test]
-fn test_basic_math_because_idk() {
+fn do_secp256k1_full_tofn_bip340(t: u32, n: u32) {
+    if n < 2 {
+        panic!("invalid n={}", n);
+    }
+
+    if t > n {
+        panic!("invalid t={}, n={}", t, n);
+    }
+
+    if t < 1 {
+        panic!("invalid t={}", t);
+    }
+
+    let ctx: Vec<u8> = vec![0, 1, 2, 3];
+    let ids = (0..n).map(|e| e + 1).collect::<Vec<_>>();
+
+    // ===== DKG =====
+
+    // DKG init (round 0)
+    let mut dkg_r0 = HashMap::new();
+    for id in &ids {
+        let mut others = ids.clone();
+        others.retain(|e| *e != *id);
+
+        let r0_state =
+            dkg::InitParticipantState::new(*id, t, ctx.clone(), others).expect("test: dkg init");
+        dkg_r0.insert(*id, r0_state);
+    }
+
+    // DKG round 1
     let mut rng = rand::rngs::OsRng;
+    let dkg_secrets = ::std::iter::repeat_with(|| k256::Scalar::random(&mut rng))
+        .enumerate()
+        .map(|(i, v)| ((i + 1) as u32, v))
+        .take(n as usize)
+        .collect::<HashMap<u32, _>>();
+    let mut dkg_r1 = HashMap::new();
+    let mut dkg_r1_bcasts = HashMap::new();
+    let mut dkg_r1_sends = HashMap::new();
+    for id in &ids {
+        let s = dkg_secrets[id];
+        let r0 = &dkg_r0[id];
 
-    let mut acc0 = k256::ProjectivePoint::GENERATOR;
-    let mut acc0norm = k256::ProjectivePoint::GENERATOR;
+        let (r1_state, bcast, p2p) = dkg::round_1(r0, s, &mut rng).expect("test: dkg r1");
+        dkg_r1.insert(*id, r1_state);
+        dkg_r1_bcasts.insert(*id, bcast);
+        dkg_r1_sends.insert(*id, p2p);
+    }
 
-    for _ in 0..20 {
-        let mut k = k256::Scalar::random(&mut rng);
+    // DKG round 2
+    let mut dkg_r2 = HashMap::new();
+    let mut dkg_r2_bcast = HashMap::new();
+    for id in &ids {
+        let r1 = &dkg_r1[id];
 
-        let kg = k256::ProjectivePoint::GENERATOR * k;
-        let kg_even = bip340::has_even_y(kg.to_affine());
-        eprintln!("kg =  {}", bip340::fmt_point(&kg.to_affine()));
+        let recv_p2p = ids
+            .iter()
+            .filter(|send_id| *send_id != id)
+            .map(|send_id| {
+                (
+                    *send_id,
+                    dkg_r1_sends
+                        .get(send_id)
+                        .expect("test: dkg get sender output")
+                        .get(id)
+                        .expect("test: dkg get receiver input")
+                        .clone(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
 
-        let pa0p = bip340::has_even_y(acc0.to_affine());
-        let pa0np = bip340::has_even_y(acc0norm.to_affine());
+        let (r2_state, bcast) = dkg::round_2(&r1, &dkg_r1_bcasts, &recv_p2p).expect("test: dkg r2");
+        dkg_r2.insert(*id, r2_state);
+        dkg_r2_bcast.insert(*id, bcast);
+    }
 
-        acc0 += kg;
-        if kg_even {
-            acc0norm += kg;
-        } else {
-            acc0norm += -kg;
-        }
+    // DKG verify all vks same
+    let first = &dkg_r2_bcast[&1];
+    let native_pk_0 = first.to_schnorr_pubkey().to_native();
+    let native_vk = k256::schnorr::VerifyingKey::try_from(&native_pk_0).expect("test: conv xonly");
+    for id in &ids[1..] {
+        let at = &dkg_r2_bcast[id];
+        let native_pk_i = at.to_schnorr_pubkey().to_native();
+        assert_eq!(native_pk_0, native_pk_i);
+    }
 
+    // ===== threshold signing =====
+
+    // Pick who is going to sign.
+    let mut signers = ids.clone();
+    signers.shuffle(&mut rng);
+    signers.truncate(t as usize); // make more configurable?
+    signers.sort();
+
+    // Thresh round 0 (init)
+    let mut th_r0 = HashMap::new();
+    for id in &signers {
+        let dkg_r2_state = dkg_r2.get(id).unwrap();
+
+        let mut cosigners = signers.clone();
+
+        let r0_state = thresh::SignerState::new(&dkg_r2_state, cosigners, Bip340Chderiv)
+            .expect("test: thresh init");
+
+        th_r0.insert(*id, r0_state);
+    }
+
+    // Thresh round 1
+    let mut th_r1 = HashMap::new();
+    let mut th_r1_bcast = HashMap::new();
+    for id in &signers {
+        let r0 = th_r0.get(id).unwrap();
+
+        let (r1_state, bcast) = thresh::round_1(&r0, &mut rng).expect("test: thresh r1");
+
+        th_r1.insert(*id, r1_state);
+        th_r1_bcast.insert(*id, bcast);
+    }
+
+    // Prep the message hash
+    let msg = hex::decode(MSG_STR).expect("test: parse message");
+    let msg_digest = Sha256::digest(&msg);
+    let msg_hash = msg_digest.into();
+
+    // Thresh round 2
+    let mut th_r2 = HashMap::new();
+    let mut th_r2_bcast = HashMap::new();
+    for id in &signers {
+        let r1 = th_r1.get(id).unwrap();
+
+        let (r2_state, bcast) =
+            thresh::round_2(&r1, &msg_hash, &th_r1_bcast).expect("test: thresh r2");
+
+        th_r2.insert(*id, r2_state);
+        th_r2_bcast.insert(*id, bcast);
+    }
+
+    // Thresh round 2
+    let mut th_r3 = HashMap::new();
+    let mut th_r3_bcast = HashMap::new();
+    for id in &signers {
+        let r2 = th_r2.get(id).unwrap();
+
+        let (r3_state, bcast) = thresh::round_3(&r2, &th_r2_bcast).expect("test: thresh r3");
+
+        th_r3.insert(*id, r3_state);
+        th_r3_bcast.insert(*id, bcast);
+    }
+
+    // Verify output sigs.
+    for id in &signers {
+        let st = &th_r3[id];
+        let bc = &th_r3_bcast[id];
+
+        let native_sig_i = bc.to_taproot_sig().to_native();
+        assert!(native_vk.verify_prehashed(&msg_hash, &native_sig_i).is_ok());
+    }
+}
+
+/*
+#[test]
+fn test_secp256k1_full_2of3_bip340() {
+    do_secp256k1_full_tofn_bip340(2, 3)
+}
+
+#[test]
+fn test_secp256k1_full_6of11_bip340() {
+    do_secp256k1_full_tofn_bip340(6, 11)
+}
+ */
+
+/// Tests various combinations of thresholds.
+#[test]
+fn test_secp256k1_full_various_bip340() {
+    const THRESHES: &[(u32, u32)] = &[
+        (2, 2),
+        (2, 3),
+        (2, 5),
+        (2, 100),
+        (3, 99),
+        (5, 50),
+        (10, 20),
+        (20, 30),
+        (30, 40),
+        (67, 100),
+    ];
+
+    let min = 2;
+    let max = 50;
+
+    for (t, n) in THRESHES {
+        eprintln!("====[ test {} of {} ]", t, n);
+        let start = now_ms();
+        do_secp256k1_full_tofn_bip340(*t, *n);
+        let end = now_ms();
+        let dur = end - start;
+
+        // TODO measure dkg vs signing time directly instead of estimating a range
+        let per_thresh = dur / *t as u64;
+        let per_total = dur / *n as u64;
         eprintln!(
-            "a0 =  {}\na0n=  {}",
-            bip340::fmt_point(&acc0.to_affine()),
-            bip340::fmt_point(&acc0norm.to_affine()),
-        );
-
-        let na0p = bip340::has_even_y(acc0.to_affine());
-        let na0np = bip340::has_even_y(acc0norm.to_affine());
-
-        eprintln!(
-            "{}.{}={} {}.{}={}\n-----",
-            pa0p, kg_even, na0p, pa0np, true, na0np
+            "\ttook {} ms -> {}~{} ms per party\n",
+            dur, per_total, per_thresh
         );
     }
+}
+
+fn now_ms() -> u64 {
+    ::std::time::UNIX_EPOCH.elapsed().unwrap().as_millis() as u64
 }

@@ -32,6 +32,10 @@ impl<M: Math> SchnorrPubkey<M> {
     pub fn is_x_only(&self) -> bool {
         !M::group_point_is_negative(self.y)
     }
+
+    pub fn to_native(&self) -> M::Pk {
+        M::conv_pk(self)
+    }
 }
 
 #[derive(Clone)]
@@ -139,6 +143,10 @@ impl<M: Math> TaprootSignature<M> {
                 return None;
             },
         })
+    }
+
+    pub fn to_native(&self) -> M::Sig {
+        M::conv_tapsig(self)
     }
 }
 

@@ -33,6 +33,9 @@ pub enum Error {
     #[error("threshold {1} greater than supplied {0} signers")]
     InsufficientCosigners(u32, u32),
 
+    #[error("self missing from cosigners {0}")]
+    MissingFromCosigners(u32),
+
     #[error("coefficients list mismatch length with cosigners list ({0} != {1})")]
     CoeffsCosignersMismatchCount(usize, usize),
 
@@ -111,6 +114,10 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
 
         if id == 0 {
             return Err(Error::ZeroParticipantId);
+        }
+
+        if !cosigners.contains(&id) {
+            return Err(Error::MissingFromCosigners(id));
         }
 
         if thresh as usize > cosigners.len() {

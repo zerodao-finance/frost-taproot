@@ -225,6 +225,7 @@ pub fn round_1<R: RngCore + CryptoRng>(
     ),
     Round1Error,
 > {
+    #[cfg(feature = "debug_eprintlns")]
     eprintln!("== round 2");
     // TODO should we check the number of participants?
 
@@ -362,6 +363,7 @@ pub fn round_2(
     ),
     Round2Error,
 > {
+    #[cfg(feature = "debug_eprintlns")]
     eprintln!("== round 2");
 
     // We should validate Wi and Ci values in Round1Bcasts
@@ -416,6 +418,7 @@ pub fn round_2(
         if cj != bc.ci {
             return Err(Round2Error::HashCheckFailed(*id));
         } else {
+            #[cfg(feature = "debug_eprintlns")]
             eprintln!("they match!");
         }
 
