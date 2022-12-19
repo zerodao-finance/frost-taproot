@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use wasm_bindgen::prelude::*;
 
-use krustology_core::frost::math::{Math, Secp256k1Math};
+use krustology_core::frost::{
+    challenge::Bip340Chderiv,
+    math::{Math, Secp256k1Math},
+};
 
-pub use krustology_core::frost::{dkg, serde as fserde};
+pub use krustology_core::frost::{dkg, serde as fserde, thresh};
 
 #[derive(Serialize, Deserialize)]
 pub struct DkgR1Output {
@@ -35,54 +38,20 @@ pub struct DkgR2Output {
     pub bcast: dkg::Round2Bcast<Secp256k1Math>,
 }
 
-/*
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct SignerState {
-    // TODO it's really complicated
-}
-
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize)]
 pub struct SignR1Output {
-    state: SignerState,
-    bcast: SignR1Bcast,
+    pub state: thresh::SignerState<Secp256k1Math, Bip340Chderiv>,
+    pub bcast: thresh::Round1Bcast<Secp256k1Math>,
 }
 
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct SignR1Bcast {
-    di: SerdePoint,
-    ei: SerdePoint,
-}
-
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize)]
 pub struct SignR2Output {
-    state: SignerState,
-    bcast: SignR2Bcast,
+    pub state: thresh::SignerState<Secp256k1Math, Bip340Chderiv>,
+    pub bcast: thresh::Round2Bcast<Secp256k1Math>,
 }
 
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct SignR2Bcast {
-    zi: SerdeScalar,
-    vki: SerdePoint,
-}
-
-#[wasm_bindgen]
 #[derive(Serialize, Deserialize)]
 pub struct SignR3Output {
-    state: SignerState,
-    bcast: SignR3Bcast,
+    pub state: thresh::SignerState<Secp256k1Math, Bip340Chderiv>,
+    pub bcast: thresh::Round3Bcast<Secp256k1Math>,
 }
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct SignR3Bcast {
-    r: SerdePoint,
-    z: SerdeScalar,
-    c: SerdeScalar,
-    msg: Vec<u8>,
-}
-*/

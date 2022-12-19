@@ -20,6 +20,7 @@ js-sys = "0.3"
 k256 = "0.12.0-pre.0"
 rand = "0.8"
 rand_chacha = "*"
+elliptic-curve = { version = "0.12", features = ["serde", "sec1", "arithmetic", "hazmat"] }
 
 [dependencies.vsss-rs]
 git = "https://github.com/mikelodder7/vsss-rs.git"

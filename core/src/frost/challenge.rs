@@ -5,6 +5,7 @@ pub use ff::{Field, PrimeField};
 use rand::SeedableRng;
 
 use ec::group::{Group, GroupEncoding, ScalarMul};
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 use super::hash::*;
@@ -36,7 +37,7 @@ const BIP340_CHALLENGE_TAG: &[u8] = b"BIP0340/challenge";
 /// rounds and generate challenges that are specifically compliant with the
 /// BIP340 spec (tagged hash, x-only pubkey, etc.), and so it's specialized for
 /// secp256k1 instead of being able to work on any curve.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Bip340Chderiv;
 
 impl ChallengeDeriver<Secp256k1Math> for Bip340Chderiv {

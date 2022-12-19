@@ -3,6 +3,7 @@ use elliptic_curve::sec1::ToEncodedPoint;
 pub use elliptic_curve::{Curve, ScalarArithmetic};
 use elliptic_curve::{IsHigh, ProjectiveArithmetic};
 pub use ff::{Field, PrimeField};
+use serde::{Deserialize, Serialize};
 
 use super::sig::{SchnorrPubkey, Signature, TaprootSignature};
 
@@ -41,7 +42,7 @@ pub trait Math: Clone {
     fn conv_tapsig(sig: &TaprootSignature<Self>) -> Self::Sig;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Secp256k1Math;
 
 impl Math for Secp256k1Math {
