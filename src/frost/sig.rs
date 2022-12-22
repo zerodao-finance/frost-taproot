@@ -5,10 +5,9 @@ use ff::{Field, PrimeField};
 use rand::Rng;
 
 use ec::group::{Group, GroupEncoding};
-use ec::sec1::ToEncodedPoint;
 
 use super::bip340::{self, has_even_y};
-use super::challenge::*;
+use super::challenge::{self, *};
 use super::math::{Math, Secp256k1Math};
 
 #[derive(Clone)]
@@ -140,8 +139,9 @@ impl<M: Math> TaprootSignature<M> {
         }
 
         // I don't like that this is a vec.
-        let mut rbuf = vec![0; (M::F_SIZE + 1)];
-        rbuf[0] = 0x02;
+        //
+        // Also this is so silly, making the 0x02 everywhere.
+        let mut rbuf = vec![0x02; M::F_SIZE + 1];
         rbuf[1..].copy_from_slice(&buf[..M::G_SIZE]);
         let rr = M::group_repr_from_bytes(&rbuf)?;
         let sbuf = &buf[M::G_SIZE..];
@@ -183,7 +183,9 @@ pub fn verify<M: Math, C: ChallengeDeriver<M>>(
     let tmp_r = zg - cvk;
 
     // c' = H(m, R')
-    let tmp_c = cderiv.derive_challenge(&msg_hash, pk.y, tmp_r);
+    let Ok(tmp_c) = cderiv.derive_challenge(&msg_hash, pk.y, tmp_r) else {
+        return false;
+    };
 
     // Check c == c'
     tmp_c == sig.c
@@ -194,7 +196,7 @@ pub fn sign_secp256k1_taproot(
     secret_x: k256::Scalar,
     msg_hash: &[u8; 32],
     rng: &mut impl Rng,
-) -> TaprootSignature<Secp256k1Math> {
+) -> Result<TaprootSignature<Secp256k1Math>, challenge::Error> {
     let p = k256::ProjectivePoint::GENERATOR * secret_x;
 
     let kprime = k256::Scalar::random(rng);
@@ -205,7 +207,8 @@ pub fn sign_secp256k1_taproot(
         -kprime
     };
 
-    let e = Bip340Chderiv.derive_challenge(msg_hash, p, r);
+    let e = Bip340Chderiv.derive_challenge(msg_hash, p, r)?;
+
     let s = k + (e * secret_x);
     let sexp = k256::ProjectivePoint::GENERATOR * s;
 
@@ -220,7 +223,7 @@ pub fn sign_secp256k1_taproot(
         eprintln!("sign r={}", hex::encode(r.to_encoded_point(true)));
     }
 
-    TaprootSignature { r, s }
+    Ok(TaprootSignature { r, s })
 }
 
 /// Verifies a taprooty signature using the specified challenge deriver.
@@ -230,7 +233,10 @@ pub fn verify_secp256k1_taproot(
     sig: &TaprootSignature<Secp256k1Math>,
 ) -> bool {
     // e = H_c(r || P || m)
-    let e = Bip340Chderiv.derive_challenge(msg_hash, pk.y, sig.r);
+    let Ok(e) = Bip340Chderiv.derive_challenge(msg_hash, pk.y, sig.r) else {
+        // TODO make this return why?
+        return false;
+    };
 
     // r_v = sG + eP
     let sg = k256::ProjectivePoint::GENERATOR * sig.s;

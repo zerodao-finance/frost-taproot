@@ -194,7 +194,7 @@ fn test_secp256k1_simplesign_bip340() {
 
     let pk_tap = SchnorrPubkey::from_group_elem(pk);
 
-    let sig = sig::sign_secp256k1_taproot(sk, &msg_hash, &mut rng);
+    let sig = sig::sign_secp256k1_taproot(sk, &msg_hash, &mut rng).expect("test: sign");
 
     assert!(sig::verify_secp256k1_taproot(&pk_tap, &msg_hash, &sig));
     println!("passed our verifier");

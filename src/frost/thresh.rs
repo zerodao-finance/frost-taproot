@@ -9,7 +9,13 @@ use sha2::Sha256;
 use thiserror::Error;
 
 use super::sig::{Signature, TaprootSignature};
-use super::{bip340, challenge::*, dkg, math::*, serde::*};
+use super::{
+    bip340,
+    challenge::{self, *},
+    dkg,
+    math::*,
+    serde::*,
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -276,6 +282,9 @@ pub enum Round2Error {
     #[error("input bcast size {0} mismatch with thresh {1}")]
     InputMismatchThresh(u32, u32),
 
+    #[error("chderiv: {0}")]
+    Challenge(#[from] challenge::Error),
+
     #[error("unimplemented")]
     Unimplemented,
 }
@@ -381,7 +390,7 @@ pub fn round_2(
     // Step 7 - c = H(m, R)
     let c = signer
         .challenge_deriver
-        .derive_challenge(&msg_hash, signer.vk, sum_cap_r);
+        .derive_challenge(&msg_hash, signer.vk, sum_cap_r)?;
 
     let li = signer.lcoeffs[&signer.id].0;
     let z_i = eff_small_di + (eff_small_ei * rho_i) + (li * signer.sk_share * c);
@@ -459,6 +468,9 @@ pub enum Round3Error {
 
     #[error("invalid signature (c != c')")]
     InvalidSignature,
+
+    #[error("chderiv: {0}")]
+    Challenge(#[from] challenge::Error),
 
     #[error("unimplemented")]
     Unimplemented,
@@ -558,7 +570,7 @@ pub fn round_3(
     // Now go see if we have to flip the parity.
     let tmp_e = signer
         .challenge_deriver
-        .derive_challenge(&signer_msg, signer.vk, r2is.sum_r);
+        .derive_challenge(&signer_msg, signer.vk, r2is.sum_r)?;
     let _tmp_r = (k256::ProjectivePoint::GENERATOR * z) + (signer.vk * tmp_e);
 
     // Step 4 - 7: Self verify the signature (z, c)
@@ -570,7 +582,7 @@ pub fn round_3(
     // Step 6 - c' = H(m, R')
     let tmp_c = signer
         .challenge_deriver
-        .derive_challenge(&signer_msg, signer.vk, tmp_r);
+        .derive_challenge(&signer_msg, signer.vk, tmp_r)?;
 
     // Step 7 - Check c = c'
     if tmp_c != signer_c {
