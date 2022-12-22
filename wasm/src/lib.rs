@@ -3,17 +3,17 @@ use std::hash::Hash;
 use std::panic;
 
 use elliptic_curve::ops::Reduce;
+use frost_taproot::frost::challenge::Bip340Chderiv;
 use getrandom::getrandom;
 use k256::elliptic_curve::PrimeField;
 use k256::schnorr::signature::SignatureEncoding;
-use krustology_core::frost::challenge::Bip340Chderiv;
 use rand::SeedableRng;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use vsss_rs::Shamir;
 use wasm_bindgen::prelude::*;
 
-use krustology_core::frost::{dkg, math, math::Secp256k1Math, thresh};
+use frost_taproot::frost::{dkg, math, math::Secp256k1Math, thresh};
 
 mod frost_secp256k1;
 mod utils;

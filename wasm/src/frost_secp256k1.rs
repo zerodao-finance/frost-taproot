@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use wasm_bindgen::prelude::*;
 
-use krustology_core::frost::{
+use frost_taproot::frost::{
     challenge::Bip340Chderiv,
     math::{Math, Secp256k1Math},
 };
 
-pub use krustology_core::frost::{dkg, serde as fserde, thresh};
+pub use frost_taproot::frost::{dkg, serde as fserde, thresh};
 
 #[derive(Serialize, Deserialize)]
 pub struct DkgR1Output {

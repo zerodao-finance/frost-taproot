@@ -1,5 +1,5 @@
 [package]
-name = "krustology-wasm"
+name = "frost-taproot-wasm"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-krustology-core = { path = "../core" }
+frost-taproot = { path = "../core" }
 wasm-bindgen = "0.2"
 getrandom = { version = "*", features = ["js"] }
 serde = { version = "1", features = ["derive"] }
