@@ -1,19 +1,24 @@
 pub use elliptic_curve::group::{Group, GroupEncoding, ScalarMul};
 use elliptic_curve::sec1::ToEncodedPoint;
+use elliptic_curve::IsHigh;
 pub use elliptic_curve::{Curve, ScalarArithmetic};
-use elliptic_curve::{IsHigh, ProjectiveArithmetic};
 pub use ff::{Field, PrimeField};
 use serde::{Deserialize, Serialize};
 
-use super::sig::{SchnorrPubkey, Signature, TaprootSignature};
+use super::sig::{SchnorrPubkey, TaprootSignature};
 
 pub trait Math: Clone {
     type C: elliptic_curve::Curve
         + elliptic_curve::AffineArithmetic
         + elliptic_curve::ProjectiveArithmetic;
 
-    type F: PrimeField;
-    type G: Group + GroupEncoding + Default + ScalarMul<Self::F>;
+    type G: Group + GroupEncoding + Default + ScalarMul<<Self::G as Group>::Scalar>;
+
+    /// Number of bytes needed to construct a repr of the field element.
+    const F_SIZE: usize;
+
+    /// Number of bytes needed to construct a repr of the group element.
+    const G_SIZE: usize;
 
     /// Native public key type.
     type Pk;
@@ -48,9 +53,10 @@ pub struct Secp256k1Math;
 impl Math for Secp256k1Math {
     type C = k256::Secp256k1;
 
-    type F = k256::Scalar;
-
     type G = k256::ProjectivePoint;
+
+    const F_SIZE: usize = 32;
+    const G_SIZE: usize = 32;
 
     type Pk = k256::PublicKey;
 
@@ -86,7 +92,7 @@ impl Math for Secp256k1Math {
         let y = ep.y().unwrap();
 
         // Really terrible conversion, surely we can just mask out 1 bit of this and check, right?
-        let y_fb = <Self::F as PrimeField>::from_repr(
+        let y_fb = <<Self::G as Group>::Scalar as PrimeField>::from_repr(
             k256::FieldBytes::from_exact_iter(y.iter().copied()).unwrap(),
         )
         .unwrap();

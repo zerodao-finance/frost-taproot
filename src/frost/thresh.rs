@@ -1,26 +1,15 @@
 use std::collections::*;
-use std::fmt;
 
 use digest::Digest;
 use elliptic_curve::ops::Reduce;
-use elliptic_curve::sec1::Coordinates;
-use elliptic_curve::sec1::ToEncodedPoint;
-use elliptic_curve::subtle::ConditionallySelectable;
-use elliptic_curve::Curve;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use sha2::Sha256;
 use thiserror::Error;
 
-use super::bip340;
-use super::challenge::*;
-use super::dkg;
-use super::hash::*;
-use super::math::*;
-use super::serde::*;
-use super::sig::TaprootSignature;
-use super::sig::{SchnorrPubkey, Signature};
+use super::sig::{Signature, TaprootSignature};
+use super::{bip340, challenge::*, dkg, math::*, serde::*};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -332,7 +321,7 @@ pub fn round_2(
     // Step 3-6 (all of these r values are rhos in the paper)
     let mut sum_cap_r = k256::ProjectivePoint::IDENTITY;
     let mut rho_i = k256::Scalar::ZERO; // gets overwritten
-    let mut flipped = false;
+    let _flipped = false;
     let mut rs = HashMap::<u32, WrappedPoint<Secp256k1Math>>::new();
     for (id, data) in round2_input {
         // Construct the binding balue commitment: (j, m, {Dj, Ej})
@@ -342,10 +331,10 @@ pub fn round_2(
         // TODO We could make this operation faster by being sloppy with it, it
         // wouldn't reduce security afaik.
         let bh = Sha256::digest(blob);
-        let mut rho_j = <k256::Scalar as Reduce<k256::U256>>::from_be_bytes_reduced(bh);
+        let rho_j = <k256::Scalar as Reduce<k256::U256>>::from_be_bytes_reduced(bh);
 
         // Step 5 - R_j = D_j + r_j*E_j
-        let mut cap_r_j = data.cap_di + (data.cap_ei * rho_j);
+        let cap_r_j = data.cap_di + (data.cap_ei * rho_j);
 
         #[cfg(feature = "debug_eprintlns")]
         eprintln!(
@@ -395,8 +384,8 @@ pub fn round_2(
         .derive_challenge(&msg_hash, signer.vk, sum_cap_r);
 
     let li = signer.lcoeffs[&signer.id].0;
-    let mut z_i = eff_small_di + (eff_small_ei * rho_i) + (li * signer.sk_share * c);
-    let gzi = k256::ProjectivePoint::GENERATOR * z_i;
+    let z_i = eff_small_di + (eff_small_ei * rho_i) + (li * signer.sk_share * c);
+    let _gzi = k256::ProjectivePoint::GENERATOR * z_i;
 
     #[cfg(feature = "debug_eprintlns")]
     eprintln!(
@@ -570,7 +559,7 @@ pub fn round_3(
     let tmp_e = signer
         .challenge_deriver
         .derive_challenge(&signer_msg, signer.vk, r2is.sum_r);
-    let tmp_r = (k256::ProjectivePoint::GENERATOR * z) + (signer.vk * tmp_e);
+    let _tmp_r = (k256::ProjectivePoint::GENERATOR * z) + (signer.vk * tmp_e);
 
     // Step 4 - 7: Self verify the signature (z, c)
     let zg = k256::ProjectivePoint::GENERATOR * z;
@@ -604,7 +593,7 @@ pub fn round_3(
         c: signer_c,
     };
 
-    let rbuf = zg.to_bytes().to_vec();
+    let _rbuf = zg.to_bytes().to_vec();
     #[cfg(feature = "debug_eprintlns")]
     eprintln!("thresh r buf {}", hex::encode(rbuf));
 

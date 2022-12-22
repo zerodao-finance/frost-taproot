@@ -1,16 +1,9 @@
-use digest::Digest;
-use elliptic_curve::ops::Reduce;
-use elliptic_curve::sec1::Coordinates;
-use elliptic_curve::sec1::ToEncodedPoint;
-use elliptic_curve::subtle::Choice;
-use elliptic_curve::subtle::ConditionallySelectable;
-use elliptic_curve::DecompressPoint;
-use elliptic_curve::{Curve, PrimeField};
-use rand::Rng;
-use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
-use sha2::Sha256;
-use thiserror::Error;
+use elliptic_curve::{
+    ops::Reduce,
+    sec1::{Coordinates, ToEncodedPoint},
+    subtle::Choice,
+    DecompressPoint, PrimeField,
+};
 
 pub fn get_xy_coords(e: k256::AffinePoint) -> (k256::Scalar, k256::Scalar) {
     match e.to_encoded_point(false).coordinates() {

@@ -1,11 +1,11 @@
 use std::fmt;
 
-use ec::group::{Group, GroupEncoding, ScalarMul};
-use ec::sec1::ToEncodedPoint;
 use elliptic_curve as ec;
 use ff::{Field, PrimeField};
 use rand::Rng;
-use sha2::Sha256;
+
+use ec::group::{Group, GroupEncoding};
+use ec::sec1::ToEncodedPoint;
 
 use super::bip340::{self, has_even_y};
 use super::challenge::*;
@@ -25,8 +25,20 @@ impl<M: Math> SchnorrPubkey<M> {
         M::group_repr_to_bytes(self.y.to_bytes())
     }
 
-    pub fn from_bytes(&self) -> Option<M::G> {
-        unimplemented!()
+    pub fn from_bytes(&self, buf: &[u8]) -> Option<M::G> {
+        if buf.len() != M::G_SIZE {
+            return None;
+        }
+
+        let yr = M::group_repr_from_bytes(buf)?;
+        let yo = <M::G as GroupEncoding>::from_bytes(&yr);
+
+        // Can't use normal things here because of `CtOption`.
+        if yo.is_some().into() {
+            Some(yo.unwrap())
+        } else {
+            None
+        }
     }
 
     pub fn is_x_only(&self) -> bool {
@@ -53,13 +65,14 @@ impl<M: Math> Signature<M> {
     }
 
     pub fn from_bytes(&self, buf: &[u8]) -> Option<Self> {
-        if buf.len() % 2 != 0 {
+        let exp_len = M::F_SIZE * 2;
+
+        if buf.len() != exp_len {
             return None;
         }
 
-        let half = buf.len() / 2;
-        let zs = &buf[half..];
-        let cs = &buf[..half];
+        let zs = &buf[..M::F_SIZE];
+        let cs = &buf[M::F_SIZE..];
         let zr = M::scalar_repr_from_bytes(zs)?;
         let cr = M::scalar_repr_from_bytes(cs)?;
 
@@ -120,11 +133,18 @@ impl<M: Math> TaprootSignature<M> {
     }
 
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
-        let mut rbuf = [0; 33];
+        let exp_len = M::F_SIZE + M::G_SIZE;
+
+        if buf.len() != exp_len {
+            return None;
+        }
+
+        // I don't like that this is a vec.
+        let mut rbuf = vec![0; (M::F_SIZE + 1)];
         rbuf[0] = 0x02;
-        rbuf[1..].copy_from_slice(&buf[..32]);
+        rbuf[1..].copy_from_slice(&buf[..M::G_SIZE]);
         let rr = M::group_repr_from_bytes(&rbuf)?;
-        let sbuf = &buf[32..];
+        let sbuf = &buf[M::G_SIZE..];
         let sr = M::scalar_repr_from_bytes(sbuf)?;
 
         let ro = <M::G as GroupEncoding>::from_bytes(&rr);
@@ -173,7 +193,7 @@ pub fn verify<M: Math, C: ChallengeDeriver<M>>(
 pub fn sign_secp256k1_taproot(
     secret_x: k256::Scalar,
     msg_hash: &[u8; 32],
-    mut rng: &mut impl Rng,
+    rng: &mut impl Rng,
 ) -> TaprootSignature<Secp256k1Math> {
     let p = k256::ProjectivePoint::GENERATOR * secret_x;
 
@@ -189,13 +209,16 @@ pub fn sign_secp256k1_taproot(
     let s = k + (e * secret_x);
     let sexp = k256::ProjectivePoint::GENERATOR * s;
 
-    eprintln!("sign e={}", hex::encode(e.to_bytes()));
-    eprintln!(
-        "sign g^s={} s={}",
-        hex::encode(sexp.to_bytes()),
-        hex::encode(s.to_bytes())
-    );
-    eprintln!("sign r={}", hex::encode(r.to_encoded_point(true)));
+    #[cfg(feature = "debug_eprintlns")]
+    {
+        eprintln!("sign e={}", hex::encode(e.to_bytes()));
+        eprintln!(
+            "sign g^s={} s={}",
+            hex::encode(sexp.to_bytes()),
+            hex::encode(s.to_bytes())
+        );
+        eprintln!("sign r={}", hex::encode(r.to_encoded_point(true)));
+    }
 
     TaprootSignature { r, s }
 }

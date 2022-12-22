@@ -4,7 +4,6 @@ use digest::Digest;
 use ec::ops::Reduce;
 use elliptic_curve as ec;
 use ff::{Field, PrimeField};
-use group::Curve;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, TryFromInto};
@@ -18,7 +17,7 @@ use ec::group::{Group, GroupEncoding};
 use crate::frost::bip340;
 
 use super::serde::*;
-use super::{hash, math::*, sig};
+use super::{math::*, sig};
 
 /// The Shamir crate we use is hardcoded to only support 1 byte index tags in
 /// shares, and index 0 is an invalid index because of the way the math works.
@@ -231,7 +230,7 @@ pub fn round_1<R: RngCore + CryptoRng>(
 
     // There was some stuff here but due to Rust we don't need it.
     let s = secret;
-    let sg = k256::ProjectivePoint::GENERATOR * s;
+    let _sg = k256::ProjectivePoint::GENERATOR * s;
 
     #[cfg(feature = "debug_eprintlns")]
     eprintln!(
