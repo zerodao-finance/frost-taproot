@@ -400,7 +400,7 @@ pub fn round_2(
     eprintln!(
         "vk_i = {}, g^z_i = {}, z_i = {}",
         bip340::fmt_point(&signer.vk_share.to_affine()),
-        bip340::fmt_point(&gzi.to_affine()),
+        bip340::fmt_point(&_gzi.to_affine()),
         hex::encode(z_i.to_bytes())
     );
 
@@ -607,7 +607,7 @@ pub fn round_3(
 
     let _rbuf = zg.to_bytes().to_vec();
     #[cfg(feature = "debug_eprintlns")]
-    eprintln!("thresh r buf {}", hex::encode(rbuf));
+    eprintln!("thresh r buf {}", hex::encode(_rbuf));
 
     Ok((nsigner, r3bc))
 }

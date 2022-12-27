@@ -34,3 +34,7 @@ git = "https://github.com/mikelodder7/vsss-rs.git"
 rev = "1a0c7ca699f5fcc4133cf3d9a7df6fa5c79dfb15"
 default-features = false
 features = ["std", "secp256k1"]
+
+[features]
+default = []
+debug_eprintlns = []

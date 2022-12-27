@@ -143,6 +143,8 @@ fn do_secp256k1_thresh_sign_2of2_works_bip340() {
     let msg_digest = Sha256::digest(&msg);
     let msg_hash = msg_digest.into();
 
+    eprintln!("MSG HASH {}", hex::encode(msg_hash));
+
     let (generic_pk, _, taproot_sig) = do_secp256k1_thresh_sign_2of2(&msg_hash);
 
     eprintln!("generic verification");
@@ -158,6 +160,9 @@ fn do_secp256k1_thresh_sign_2of2_works_bip340() {
 
     let native_bip_vk =
         k256::schnorr::VerifyingKey::try_from(native_pk).expect("test: pk not xonly");
+
+    eprintln!("PK NATIVE {}", hex::encode(native_bip_vk.to_bytes()));
+    eprintln!("SIG NATIVE {}", hex::encode(native_sig.to_bytes()));
 
     eprintln!("native verification");
     if let Err(e) = native_bip_vk.verify_prehashed(&msg_hash, &native_sig) {

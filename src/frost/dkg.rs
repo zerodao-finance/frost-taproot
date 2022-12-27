@@ -237,7 +237,7 @@ pub fn round_1<R: RngCore + CryptoRng>(
         "secret {} {:?} {}",
         participant.id,
         s,
-        hex::encode(sg.to_bytes())
+        hex::encode(_sg.to_bytes())
     );
 
     // Step 1 - (Aj0,...Ajt), (xi1,...,xin) <- FeldmanShare(s)

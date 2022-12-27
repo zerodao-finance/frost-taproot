@@ -214,6 +214,7 @@ pub fn sign_secp256k1_taproot(
 
     #[cfg(feature = "debug_eprintlns")]
     {
+        use elliptic_curve::sec1::ToEncodedPoint;
         eprintln!("sign e={}", hex::encode(e.to_bytes()));
         eprintln!(
             "sign g^s={} s={}",
@@ -245,6 +246,9 @@ pub fn verify_secp256k1_taproot(
 
     #[cfg(feature = "debug_eprintlns")]
     {
+        use elliptic_curve::sec1::ToEncodedPoint;
+
+        eprintln!("gnrc e={}", hex::encode(e.to_bytes()));
         eprintln!(
             "gnrc g^s={} s={}",
             hex::encode(sg.to_encoded_point(true)),
