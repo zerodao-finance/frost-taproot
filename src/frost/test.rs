@@ -1,6 +1,7 @@
 use std::collections::*;
 
 use digest::Digest;
+use elliptic_curve::ops::Reduce;
 use k256::schnorr::signature::hazmat::PrehashVerifier;
 use k256::schnorr::signature::{DigestSigner, DigestVerifier, PrehashSignature};
 use k256::Secp256k1;
@@ -8,6 +9,8 @@ use rand::seq::SliceRandom;
 use sha2::Sha256;
 
 use crate::frost::sig::SchnorrPubkey;
+
+const MSG_STR: &str = "cafebabe";
 
 use super::sig::TaprootSignature;
 use super::{
@@ -31,8 +34,10 @@ fn do_secp256k1_dkg_2of2() -> (
 
     let mut rng = rand::thread_rng();
 
-    let p1r1_secret = k256::Scalar::random(&mut rng);
-    let p2r1_secret = k256::Scalar::random(&mut rng);
+    let s1 = Sha256::digest("secret 1");
+    let s2 = Sha256::digest("secret 2");
+    let p1r1_secret = <k256::Scalar as Reduce<k256::U256>>::from_be_bytes_reduced(s1);
+    let p2r1_secret = <k256::Scalar as Reduce<k256::U256>>::from_be_bytes_reduced(s2);
 
     let (r1p1, p1r1_bc, p1r1_s) =
         dkg::round_1(&ip1, p1r1_secret, &mut rng).expect("test: p1 round 1");
@@ -80,6 +85,12 @@ fn do_secp256k1_dkg_2of2() -> (
         hex::encode(r2p1.vk().to_bytes()),
         hex::encode(pk.to_bytes())
     );
+
+    use elliptic_curve::sec1::ToEncodedPoint;
+
+    let enc = pk.to_affine().to_encoded_point(false);
+    eprintln!("p1 pk full {}", hex::encode(enc));
+
     assert_eq!(r2p1.vk(), pk);
 
     eprintln!("=== DKG FINISHED");
@@ -91,8 +102,6 @@ fn test_secp256k1_dkg_2of2() {
     // if no panics then it passed
     let _ = do_secp256k1_dkg_2of2();
 }
-
-const MSG_STR: &str = "cafebabe13371337deadbeef01234567";
 
 fn do_secp256k1_thresh_sign_2of2(
     msg_hash: &[u8; 32],
