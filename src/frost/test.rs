@@ -113,10 +113,8 @@ fn do_secp256k1_thresh_sign_2of2(
     let (p1, _, p2, _) = do_secp256k1_dkg_2of2();
     let p1vk = p1.vk();
 
-    let is1 =
-        thresh::SignerState::new(&p1, vec![1, 2], Bip340Chderiv).expect("test: init signer 1");
-    let is2 =
-        thresh::SignerState::new(&p2, vec![1, 2], Bip340Chderiv).expect("test: init signer 2");
+    let is1 = thresh::SignerState::new(&p1, Bip340Chderiv).expect("test: init signer 1");
+    let is2 = thresh::SignerState::new(&p2, Bip340Chderiv).expect("test: init signer 2");
 
     let mut rng = rand::thread_rng();
 
@@ -350,10 +348,8 @@ fn do_secp256k1_full_tofn_bip340(t: u32, n: u32) {
     for id in &signers {
         let dkg_r2_state = dkg_r2.get(id).unwrap();
 
-        let mut cosigners = signers.clone();
-
-        let r0_state = thresh::SignerState::new(&dkg_r2_state, cosigners, Bip340Chderiv)
-            .expect("test: thresh init");
+        let r0_state =
+            thresh::SignerState::new(&dkg_r2_state, Bip340Chderiv).expect("test: thresh init");
 
         th_r0.insert(*id, r0_state);
     }

@@ -18,13 +18,14 @@ use super::{
     serde::*,
 };
 
+// TODO Some of these errors could be cleaned up.
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("zero cosigners")]
-    ZeroCosigners,
-
     #[error("participant id cannot be zero")]
     ZeroParticipantId,
+
+    #[error("zero cosigners")]
+    ZeroCosigners,
 
     #[error("threshold {1} greater than supplied {0} signers")]
     InsufficientCosigners(u32, u32),
@@ -93,28 +94,12 @@ impl<M: Math> Default for Inner<M> {
 impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
     /// Takes a final participant state and initializes a new signer with it.
     /// Some information may be redundant.
-    pub fn new(
-        info: &dkg::R2ParticipantState<M>,
-        cosigners: Vec<u32>,
-        cderiv: C,
-    ) -> Result<SignerState<M, C>, Error> {
-        if cosigners.is_empty() {
-            return Err(Error::ZeroCosigners);
-        }
-
+    pub fn new(info: &dkg::R2ParticipantState<M>, cderiv: C) -> Result<SignerState<M, C>, Error> {
         let id = info.id();
         let thresh = info.group_thresh();
 
         if id == 0 {
             return Err(Error::ZeroParticipantId);
-        }
-
-        if !cosigners.contains(&id) {
-            return Err(Error::MissingFromCosigners(id));
-        }
-
-        if thresh as usize > cosigners.len() {
-            return Err(Error::InsufficientCosigners(thresh, cosigners.len() as u32));
         }
 
         Ok(SignerState {
@@ -259,6 +244,9 @@ pub enum Round2Error {
     #[error("input bcast size {0} mismatch with thresh {1}")]
     InputMismatchThresh(u32, u32),
 
+    #[error("input missing contribution from self ({0})")]
+    InputMissingSelf(u32),
+
     #[error("chderiv: {0}")]
     Challenge(#[from] challenge::Error),
 
@@ -295,6 +283,10 @@ pub fn round_2(
             round2_input.len() as u32,
             signer.thresh,
         ));
+    }
+
+    if !cosigners.contains(&signer.id) {
+        return Err(Round2Error::InputMissingSelf(signer.id));
     }
 
     // Must be sorted.
