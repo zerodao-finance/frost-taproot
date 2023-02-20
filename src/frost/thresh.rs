@@ -2,6 +2,7 @@ use std::collections::*;
 
 use digest::Digest;
 use elliptic_curve::ops::Reduce;
+use k256::Secp256k1;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -60,9 +61,6 @@ pub struct SignerState<M: Math, C: ChallengeDeriver<M>> {
     #[serde_as(as = "Marshal<PointSerde<M>>")]
     vk: M::G,
 
-    lcoeffs: HashMap<u32, WrappedScalar<M>>,
-
-    cosigners: Vec<u32>,
     state: Inner<M>,
     challenge_deriver: C,
 }
@@ -119,46 +117,19 @@ impl<M: Math, C: ChallengeDeriver<M>> SignerState<M, C> {
             return Err(Error::InsufficientCosigners(thresh, cosigners.len() as u32));
         }
 
-        // Generate the lagrange coefficients.
-        // TODO Should we make it so these can be supplied externally?
-        let lcoeffs = gen_lagrange_coefficients::<<M::G as Group>::Scalar>(
-            cosigners.len() as u32,
-            thresh,
-            &cosigners,
-        );
-
-        // This check should never fail now, should we remove it?
-        if lcoeffs.len() != cosigners.len() {
-            return Err(Error::CoeffsCosignersMismatchCount(
-                lcoeffs.len(),
-                cosigners.len(),
-            ));
-        }
-
-        if !cosigners.iter().all(|id| lcoeffs.contains_key(id)) {
-            return Err(Error::CoeffsCosignersMismatch);
-        }
-
-        // Wrap them in the serde-able type.
-        let lcoeffs = lcoeffs
-            .into_iter()
-            .map(|(k, v)| (k, WrappedScalar(v)))
-            .collect::<_>();
-
         Ok(SignerState {
             id,
             thresh,
             sk_share: info.sk_share(),
             vk_share: info.vk_share(),
             vk: info.vk(),
-            lcoeffs,
-            cosigners,
             state: Inner::Init,
             challenge_deriver: cderiv,
         })
     }
 }
 
+/// MAKE SURE NEVER TO REUSE THIS ACROSS SESSIONS
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct R1InnerState<M: Math> {
@@ -259,6 +230,12 @@ pub struct R2InnerState<M: Math> {
 
     #[serde_as(as = "Marshal<PointSerde<M>>")]
     sum_r: M::G,
+
+    /// Lagrange coefficients
+    lcoeffs: HashMap<u32, WrappedScalar<M>>,
+
+    /// Sorted list of cosigners now that we know them, including ourselves.
+    cosigners: Vec<u32>,
 }
 
 #[serde_as]
@@ -312,13 +289,16 @@ pub fn round_2(
     // * Make sure those private d is not empty and not zero
     // * Make sure those private e is not empty and not zero
 
-    let r2iu32 = round2_input.len() as u32;
-    if r2iu32 != signer.thresh {
+    let mut cosigners = round2_input.keys().copied().collect::<Vec<_>>();
+    if cosigners.len() != signer.thresh as usize {
         return Err(Round2Error::InputMismatchThresh(
             round2_input.len() as u32,
             signer.thresh,
         ));
     }
+
+    // Must be sorted.
+    cosigners.sort();
 
     let mut nsigner = signer.clone();
 
@@ -333,8 +313,10 @@ pub fn round_2(
     let _flipped = false;
     let mut rs = HashMap::<u32, WrappedPoint<Secp256k1Math>>::new();
     for (id, data) in round2_input {
+        // TODO We don't have to, but should we add these together in a deterministic order?
+
         // Construct the binding balue commitment: (j, m, {Dj, Ej})
-        let blob = concat_hash_array(*id, &msg_hash, &round2_input, &signer.cosigners);
+        let blob = concat_hash_array(*id, &msg_hash, &round2_input, &cosigners);
 
         // Step 4 - rj = H(j,m,{Dj,Ej}_{j in [1...t]})
         // TODO We could make this operation faster by being sloppy with it, it
@@ -392,7 +374,15 @@ pub fn round_2(
         .challenge_deriver
         .derive_challenge(&msg_hash, signer.vk, sum_cap_r)?;
 
-    let li = signer.lcoeffs[&signer.id].0;
+    // Generate the lagrange coefficients.
+    // TODO Should we make it so these can be supplied externally?
+    let lcoeffs = gen_lagrange_coefficients::<k256::Scalar>(
+        cosigners.len() as u32,
+        signer.thresh,
+        &cosigners,
+    );
+
+    let li = lcoeffs[&signer.id];
     let z_i = eff_small_di + (eff_small_ei * rho_i) + (li * signer.sk_share * c);
     let _gzi = k256::ProjectivePoint::GENERATOR * z_i;
 
@@ -404,6 +394,12 @@ pub fn round_2(
         hex::encode(z_i.to_bytes())
     );
 
+    // Wrap the cosigners in the serde-able type.
+    let lcoeffs = lcoeffs
+        .into_iter()
+        .map(|(k, v)| (k, WrappedScalar(v)))
+        .collect::<_>();
+
     // Step 8 - Record c, R, Rjs
     nsigner.state = Inner::R2(R2InnerState {
         cap_di: r1is.cap_di,
@@ -413,6 +409,8 @@ pub fn round_2(
         c,
         cap_rs: rs,
         sum_r: sum_cap_r,
+        lcoeffs,
+        cosigners,
     });
 
     let r2bc = Round2Bcast {
@@ -522,7 +520,7 @@ pub fn round_3(
         let zjg = k256::ProjectivePoint::GENERATOR * zj;
 
         // c*Lj
-        let clj = signer_c * signer.lcoeffs[id].0;
+        let clj = signer_c * r2is.lcoeffs[id].0;
 
         // cLjvkj
         let cljvkj = vkj * clj;
